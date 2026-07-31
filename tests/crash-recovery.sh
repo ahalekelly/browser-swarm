@@ -3,10 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NODE="$(command -v node)"
-TEMP_ROOT="${TMPDIR:-/tmp}"
+TEMP_ROOT="${TMPDIR:?TMPDIR must be set}"
 TEMP_DIR="$(mktemp -d "${TEMP_ROOT%/}/browser-swarm-test.XXXXXX")"
 SCRIPT="$TEMP_DIR/shared-browser.sh"
-PORT="$($NODE -e "const server = require('node:net').createServer(); server.listen(0, '127.0.0.1', () => { console.log(server.address().port); server.close(); });")"
+PORT="$("$NODE" -e "const server = require('node:net').createServer(); server.listen(0, '127.0.0.1', () => { console.log(server.address().port); server.close(); });")"
 FOREIGN_PID=""
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
