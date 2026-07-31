@@ -2,6 +2,9 @@
   "name": "browser-leaf",
   "private": true,
   "license": "MIT",
+  "bin": {
+    "browser-leaf": "./install.sh"
+  },
   "dependencies": {
     "@playwright/mcp": "^0.0.78"
   }
