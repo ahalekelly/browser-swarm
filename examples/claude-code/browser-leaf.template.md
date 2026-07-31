@@ -1,6 +1,6 @@
 ---
 name: browser-leaf__SUFFIX__
-description: Headless-browser leaf agent for background web automation (lookups, extractions, form-driven flows). Owns a private isolated context in the shared headless browser daemon (start it first: __DIR__/shared-browser.sh start), but only one concurrent invocation per leaf type — Claude Code shares identical inline MCP server configs across concurrent subagents, so run parallel leaves on distinct types (browser-leaf, browser-leaf-2 … browser-leaf-5, one type per concurrent leaf).
+description: __DESCRIPTION__
 model: sonnet
 mcpServers:
   - playwright:
