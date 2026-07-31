@@ -1,4 +1,4 @@
-# browser-leaf
+# BrowserSwarm
 
 One long-lived headless browser, shared by every agent in a fan-out.
 
@@ -10,17 +10,17 @@ macOS on Apple silicon only. The daemon uses `taskpolicy`, `lsof`, and a pinned 
 
 ## Install
 
-One command, no checkout needed — clones to `~/.browser-leaf`, installs the pinned MCP deps and the checksum-verified browser, and generates the Claude Code agent definitions:
+One command, no checkout needed — clones to `~/.browser-swarm`, installs the pinned MCP deps and the checksum-verified browser, and generates the Claude Code agent definitions:
 
 ```sh
-npx github:ahalekelly/browser-leaf
+npx browser-swarm
 ```
 
 Or from a clone, run the pieces yourself:
 
 ```sh
-git clone https://github.com/ahalekelly/browser-leaf.git
-cd browser-leaf
+git clone https://github.com/ahalekelly/browser-swarm.git
+cd browser-swarm
 npm ci                              # pinned @playwright/mcp
 ./install-fingerprint-chromium.sh   # one-time browser install, checksum-verified
 ./claude-agents/install-agents.sh   # generate the agent definitions
