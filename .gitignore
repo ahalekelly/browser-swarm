@@ -4,5 +4,6 @@ node_modules/
 fingerprint-chromium/
 fingerprint-browser-profile/
 fingerprint-seed
+daemon-state
 .playwright-mcp/
 .claude/

@@ -10,8 +10,12 @@
 # derived from the port itself — the listener whose command line names our
 # profile dir is ours; there is no pidfile to go stale. A foreign process on
 # the port is always fatal, and `stop` refuses to kill it.
-# No auto-restart by design: if the browser dies, attached MCP calls fail
-# loudly and the operator runs `shared-browser.sh start` again.
+# Crash-aware auto-start: leaves launch through leaf-mcp.sh, whose `ensure`
+# verb starts a daemon that stopped cleanly (idle-stop, `stop`, reboot) but
+# refuses one that crashed — attached MCP calls already fail loudly when the
+# browser dies, and refusing resurrection keeps the crash visible to the next
+# fan-out instead of silently papering over it. Only an explicit `start`
+# clears the crash state.
 # Auto-stop: `start` also spawns a watchdog that kills the browser after
 # 5 minutes with no attached CDP clients, so an idle daemon never outlives
 # its fan-out. A leaf holds its CDP connection for exactly the lifetime of
@@ -29,6 +33,11 @@ BIN="$DIR/fingerprint-chromium/Chromium.app/Contents/MacOS/Chromium"
 # between installs: everyone on one seed presents the same device, which is
 # itself a fingerprint.
 SEED_FILE="$DIR/fingerprint-seed"
+# Shutdown marker for crash detection only — ownership stays port-derived.
+# `running <boot-epoch>` while the daemon is up; `clean` after a deliberate
+# stop. Found still `running` with the daemon down and the boot unchanged,
+# the previous instance died unannounced: that is a crash.
+STATE_FILE="$DIR/daemon-state"
 IDLE_POLL=30  # seconds between watchdog polls
 IDLE_POLLS=10 # consecutive idle polls before auto-stop (10 × 30s = 5 min)
 
@@ -56,6 +65,21 @@ client_count() {
   lsof -t -i ":$PORT" -sTCP:ESTABLISHED 2> /dev/null | sort -u | grep -cvx "$1" || true
 }
 
+boot_epoch() { sysctl -n kern.boottime | sed 's/.*sec = \([0-9]*\),.*/\1/'; }
+
+mark_running() { echo "running $(boot_epoch)" > "$STATE_FILE"; }
+mark_clean() { echo "clean" > "$STATE_FILE"; }
+
+# True when the previous daemon instance died without a deliberate stop in
+# this boot session. A marker from before a reboot is not a crash: the
+# reboot took the daemon down, and alerting on it would just be noise.
+crashed() {
+  local state boot
+  [ -f "$STATE_FILE" ] || return 1
+  read -r state boot < "$STATE_FILE" || return 1
+  [ "$state" = "running" ] && [ "$boot" = "$(boot_epoch)" ]
+}
+
 # Internal verb, spawned detached by `start`: stop the browser after
 # IDLE_POLLS consecutive polls with no attached clients. Pid-bound — it
 # exits the moment its browser is no longer the owned listener, so a stale
@@ -68,6 +92,7 @@ watchdog() {
     if [ "$(client_count "$browser_pid")" -eq 0 ]; then idle=$((idle + 1)); else idle=0; fi
     if [ "$idle" -ge "$IDLE_POLLS" ]; then
       echo "$(date '+%F %T') watchdog: no attached clients for $((IDLE_POLL * IDLE_POLLS))s, stopping browser pid $browser_pid"
+      mark_clean
       kill "$browser_pid" 2> /dev/null || true
       exit 0
     fi
@@ -85,7 +110,7 @@ spawn_watchdog() {
 start() {
   if alive; then
     OWNER="$(owner_pid)"
-    [ -n "$OWNER" ] && { spawn_watchdog "$OWNER"; echo "shared browser already up: pid $OWNER, CDP http://localhost:$PORT"; exit 0; }
+    [ -n "$OWNER" ] && { mark_running; spawn_watchdog "$OWNER"; echo "shared browser already up: pid $OWNER, CDP http://localhost:$PORT"; exit 0; }
     echo "ERROR: a foreign CDP browser is serving port $PORT — refusing to share it (see: lsof -i :$PORT)" >&2
     exit 1
   fi
@@ -94,6 +119,7 @@ start() {
     lsof -i ":$PORT" -sTCP:LISTEN >&2
     exit 1
   fi
+  crashed && echo "warning: previous shared browser instance shut down uncleanly (crashed or killed) — see $LOG" >&2
   [ -x "$BIN" ] || { echo "ERROR: fingerprint-chromium is not installed (run $DIR/install-fingerprint-chromium.sh)" >&2; exit 1; }
   # Modulo keeps the seed inside int32, which is what Chromium's flag parser takes.
   [ -s "$SEED_FILE" ] || echo $(( $(od -An -N4 -tu4 /dev/urandom | tr -d ' ') % 100000000 )) > "$SEED_FILE"
@@ -115,7 +141,7 @@ start() {
       # (ours loses the profile lock and dies) — either way the daemon is up,
       # which is all `start` promises.
       OWNER="$(owner_pid)"
-      [ -n "$OWNER" ] && { spawn_watchdog "$OWNER"; echo "shared browser up: pid $OWNER, CDP http://localhost:$PORT"; exit 0; }
+      [ -n "$OWNER" ] && { mark_running; spawn_watchdog "$OWNER"; echo "shared browser up: pid $OWNER, CDP http://localhost:$PORT"; exit 0; }
       echo "ERROR: lost port $PORT to a foreign CDP browser while starting (see: lsof -i :$PORT)" >&2
       exit 1
     fi
@@ -133,9 +159,11 @@ stop() {
       echo "ERROR: the CDP browser on port $PORT is not ours — refusing to kill it (see: lsof -i :$PORT)" >&2
       exit 1
     fi
+    crashed && { echo "note: previous instance shut down uncleanly — clearing crash state"; mark_clean; }
     echo "shared browser already stopped"
     exit 0
   fi
+  mark_clean
   kill "$OWNER"
   for _ in $(seq 1 20); do
     kill -0 "$OWNER" 2> /dev/null || { echo "shared browser stopped"; exit 0; }
@@ -153,6 +181,7 @@ status() {
       lsof -i ":$PORT" -sTCP:LISTEN
     else
       echo "not running (port $PORT closed)"
+      crashed && echo "last shutdown: unclean — daemon crashed or was killed (leaves will not auto-start it; run \`$0 start\`)"
     fi
     exit 1
   fi
@@ -177,10 +206,23 @@ status() {
   "
 }
 
+# Crash-aware gate for leaf auto-start (called by leaf-mcp.sh, not operators):
+# starts the daemon unless the previous instance crashed, in which case it
+# fails loudly so the leaf's MCP startup surfaces the crash to the
+# orchestrator instead of silently resurrecting the browser.
+ensure() {
+  if ! alive && [ -z "$(owner_pid)" ] && crashed; then
+    echo "ERROR: shared browser crashed since its last clean shutdown — refusing to auto-start so the crash stays visible. Inspect $LOG, then run: $DIR/shared-browser.sh start" >&2
+    exit 1
+  fi
+  start
+}
+
 case "${1:-}" in
   start) start ;;
   stop) stop ;;
   status) status ;;
+  ensure) ensure ;; # internal, called by leaf-mcp.sh
   watchdog) watchdog "${2:?watchdog needs the browser pid}" ;; # internal, spawned by start
   *) echo "usage: $0 start|stop|status" >&2; exit 2 ;;
 esac
