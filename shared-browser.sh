@@ -10,12 +10,12 @@
 # derived from the port itself — the listener whose command line names our
 # profile dir is ours; there is no pidfile to go stale. A foreign process on
 # the port is always fatal, and `stop` refuses to kill it.
-# Crash-aware auto-start: agents launch through browser-swarm-mcp.sh, whose `ensure`
-# verb starts a daemon that stopped cleanly (idle-stop, `stop`, reboot) but
-# refuses one that crashed — attached MCP calls already fail loudly when the
-# browser dies, and refusing resurrection keeps the crash visible to the next
-# fan-out instead of silently papering over it. Only an explicit `start`
-# clears the crash state.
+# Crash-aware auto-start: agents launch through browser-swarm-mcp.sh, whose
+# `ensure` verb starts the daemon whenever it is down. After a crash it still
+# starts the browser but exits nonzero, sacrificing that one agent's MCP so
+# the agent reports the crash to the orchestrator instead of silently papering
+# over it; the start clears the crash state, so every later agent — including
+# the sacrificed one relaunched — attaches normally.
 # Auto-stop: `start` also spawns a watchdog that kills the browser after
 # 5 minutes with no attached CDP clients, so an idle daemon never outlives
 # its fan-out. An agent holds its CDP connection for exactly the lifetime of
@@ -181,7 +181,7 @@ status() {
       lsof -i ":$PORT" -sTCP:LISTEN
     else
       echo "not running (port $PORT closed)"
-      crashed && echo "last shutdown: unclean — daemon crashed or was killed (leaves will not auto-start it; run \`$0 start\`)"
+      crashed && echo "last shutdown: unclean — daemon crashed or was killed (the next agent attach restarts it and reports the crash; \`$0 start\` clears the state now)"
     fi
     exit 1
   fi
@@ -206,13 +206,16 @@ status() {
   "
 }
 
-# Crash-aware gate for agent auto-start (called by browser-swarm-mcp.sh, not operators):
-# starts the daemon unless the previous instance crashed, in which case it
-# fails loudly so the agent's MCP startup surfaces the crash to the
-# orchestrator instead of silently resurrecting the browser.
+# Crash-aware auto-start for agents (called by browser-swarm-mcp.sh, not
+# operators): starts the daemon; after a crash it still starts the browser but
+# exits nonzero, so this one agent's MCP fails to initialize and the agent
+# reports the crash to the orchestrator — auto-recovery without hiding the
+# crash. The start clears the crash state, so every later agent (including
+# this one relaunched) attaches normally.
 ensure() {
   if ! alive && [ -z "$(owner_pid)" ] && crashed; then
-    echo "ERROR: shared browser crashed since its last clean shutdown — refusing to auto-start so the crash stays visible. Inspect $LOG, then run: $DIR/shared-browser.sh start" >&2
+    ( start )
+    echo "ERROR: shared browser crashed since its last clean shutdown (see $LOG) — it has been restarted, but this agent's MCP is deliberately failed so the crash gets reported. Relaunch the agent to attach normally." >&2
     exit 1
   fi
   start
