@@ -30,7 +30,7 @@ npm ci                              # pinned @playwright/mcp
 
 ## Use
 
-The daemon auto-starts when a leaf attaches (see the crash rules below), so routine fan-outs need no manual step. The verbs:
+The daemon auto-starts when a swarm agent attaches (see the crash rules below), so routine fan-outs need no manual step. The verbs:
 
 ```sh
 ./shared-browser.sh start   # idempotent — exit 0 if our daemon is already up; required after a crash
@@ -50,9 +50,9 @@ Both scripts must run outside any sandbox — Chromium can't write its crashpad 
 
 ## Agent definitions
 
-[`claude-agents/`](claude-agents/) holds the Claude Code subagent definitions: five sibling `browser-leaf` types that attach to the daemon, and a launched-mode Firefox variant for sites where Chromium is blocked. `install-agents.sh` generates the siblings into `~/.claude/agents/` (the npx install already ran it); the Firefox variant is copied by hand.
+[`claude-agents/`](claude-agents/) holds the Claude Code subagent definitions: five sibling `browser-swarm` types that attach to the daemon, and a launched-mode Firefox variant for sites where Chromium is blocked. `install-agents.sh` generates the siblings into `~/.claude/agents/` (the npx install already ran it); the Firefox variant is copied by hand.
 
-They must be five near-identical files rather than one, because Claude Code deduplicates inline MCP server configs by content across concurrent subagents — see [docs/claude-code-mcp-dedup.md](docs/claude-code-mcp-dedup.md). Each sibling's config differs only in its `--output-dir`, which is what defeats the dedup. "Cleaning up" those paths to match silently reintroduces one shared browser for every leaf.
+They must be five near-identical files rather than one, because Claude Code deduplicates inline MCP server configs by content across concurrent subagents — see [docs/claude-code-mcp-dedup.md](docs/claude-code-mcp-dedup.md). Each sibling's config differs only in its `--output-dir`, which is what defeats the dedup. "Cleaning up" those paths to match silently reintroduces one shared browser for every agent.
 
 The system prompt in those files carries the operating rules that matter in practice: headless only, read-only unless the task explicitly authorizes otherwise, writes confined to a temp output dir, and the tab cap below.
 
@@ -72,7 +72,7 @@ The system prompt in those files carries the operating rules that matter in prac
 
 Because the daemon is machine-wide, an orchestrator should not run `stop` after a fan-out — another session's agents may still be attached, and shutdown is the watchdog's job.
 
-**Crash-aware auto-start.** Leaves attach through `leaf-mcp.sh`, which starts the daemon when it finds it down after a *clean* shutdown — an idle-stop, an explicit `stop`, or a reboot — so a fan-out needs no manual `start`. A **crashed** daemon is never auto-restarted: every attached MCP call fails loudly with a clean error within milliseconds rather than hanging, the next leaf's launcher refuses to start with a crash notice, and only an explicit `start` (which reports the unclean shutdown) brings the browser back. Auto-starting past a crash would hide exactly the failures an operator needs to see. Crash detection is a shutdown marker beside the profile — written `running` on start, `clean` by the watchdog and `stop`, and scoped to the current boot so a reboot never reads as a crash; ownership stays derived from the port. Contexts clean themselves up: Chromium disposes a CDP-created context when its owning connection drops, so killed agents leave nothing behind. `status` showing `contexts: 1` — the untouched default new-tab page — means no leaks.
+**Crash-aware auto-start.** Agents attach through `browser-swarm-mcp.sh`, which starts the daemon when it finds it down after a *clean* shutdown — an idle-stop, an explicit `stop`, or a reboot — so a fan-out needs no manual `start`. A **crashed** daemon is never auto-restarted: every attached MCP call fails loudly with a clean error within milliseconds rather than hanging, the next agent's launcher refuses to start with a crash notice, and only an explicit `start` (which reports the unclean shutdown) brings the browser back. Auto-starting past a crash would hide exactly the failures an operator needs to see. Crash detection is a shutdown marker beside the profile — written `running` on start, `clean` by the watchdog and `stop`, and scoped to the current boot so a reboot never reads as a crash; ownership stays derived from the port. Contexts clean themselves up: Chromium disposes a CDP-created context when its owning connection drops, so killed agents leave nothing behind. `status` showing `contexts: 1` — the untouched default new-tab page — means no leaks.
 
 **Fingerprint.** The daemon generates a random seed on first start and persists it beside the profile, so the browser keeps one stable device identity across restarts. The seed is process-level, so isolated contexts do **not** get isolated fingerprints: every context on one daemon returns identical canvas hashes, WebGL strings, and screen metrics, and all attached agents look like one device. Run separate daemons where that matters. It launches under `taskpolicy -c utility`, so every Chromium process is QoS-clamped below the user's foreground apps.
 

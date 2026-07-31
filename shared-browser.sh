@@ -4,13 +4,13 @@
 # MCP instances attach with: --cdp-endpoint http://localhost:9377 --isolated
 # (--isolated is required: without it instances share the default context and
 # hijack each other's tabs).
-# Port 9377, deliberately not 9222: 9222 is the universal CDP default, and a
-# leaf must never attach to some other tool's debug browser (or vice versa).
+# Port 9377, deliberately not 9222: 9222 is the universal CDP default, and an
+# agent must never attach to some other tool's debug browser (or vice versa).
 # `start` is idempotent: safe to fire blind before any fan-out. Ownership is
 # derived from the port itself — the listener whose command line names our
 # profile dir is ours; there is no pidfile to go stale. A foreign process on
 # the port is always fatal, and `stop` refuses to kill it.
-# Crash-aware auto-start: leaves launch through leaf-mcp.sh, whose `ensure`
+# Crash-aware auto-start: agents launch through browser-swarm-mcp.sh, whose `ensure`
 # verb starts a daemon that stopped cleanly (idle-stop, `stop`, reboot) but
 # refuses one that crashed — attached MCP calls already fail loudly when the
 # browser dies, and refusing resurrection keeps the crash visible to the next
@@ -18,8 +18,8 @@
 # clears the crash state.
 # Auto-stop: `start` also spawns a watchdog that kills the browser after
 # 5 minutes with no attached CDP clients, so an idle daemon never outlives
-# its fan-out. A leaf holds its CDP connection for exactly the lifetime of
-# its MCP process, so zero established connections means no leaf from any
+# its fan-out. An agent holds its CDP connection for exactly the lifetime of
+# its MCP process, so zero established connections means no agent from any
 # session is attached.
 set -euo pipefail
 
@@ -56,10 +56,10 @@ owner_pid() {
 }
 
 # Number of distinct processes holding an established connection to the CDP
-# port, excluding the browser ($1) itself. 0 means no leaf is attached.
-# Counting connections rather than contexts or pages is deliberate: a leaf
+# port, excluding the browser ($1) itself. 0 means no agent is attached.
+# Counting connections rather than contexts or pages is deliberate: an agent
 # between tabs has no pages, and a pageless context created by another CDP
-# connection is invisible to playwright's contexts() — but the leaf's CDP
+# connection is invisible to playwright's contexts() — but the agent's CDP
 # connection itself is always there.
 client_count() {
   lsof -t -i ":$PORT" -sTCP:ESTABLISHED 2> /dev/null | sort -u | grep -cvx "$1" || true
@@ -206,9 +206,9 @@ status() {
   "
 }
 
-# Crash-aware gate for leaf auto-start (called by leaf-mcp.sh, not operators):
+# Crash-aware gate for agent auto-start (called by browser-swarm-mcp.sh, not operators):
 # starts the daemon unless the previous instance crashed, in which case it
-# fails loudly so the leaf's MCP startup surfaces the crash to the
+# fails loudly so the agent's MCP startup surfaces the crash to the
 # orchestrator instead of silently resurrecting the browser.
 ensure() {
   if ! alive && [ -z "$(owner_pid)" ] && crashed; then
@@ -222,7 +222,7 @@ case "${1:-}" in
   start) start ;;
   stop) stop ;;
   status) status ;;
-  ensure) ensure ;; # internal, called by leaf-mcp.sh
+  ensure) ensure ;; # internal, called by browser-swarm-mcp.sh
   watchdog) watchdog "${2:?watchdog needs the browser pid}" ;; # internal, spawned by start
   *) echo "usage: $0 start|stop|status" >&2; exit 2 ;;
 esac
