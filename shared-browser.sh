@@ -16,11 +16,13 @@
 # the agent reports the crash to the orchestrator instead of silently papering
 # over it; the start clears the crash state, so every later agent — including
 # the sacrificed one relaunched — attaches normally.
-# Auto-stop: `start` also spawns a watchdog that kills the browser after
-# 5 minutes with no attached CDP clients, so an idle daemon never outlives
-# its fan-out. An agent holds its CDP connection for exactly the lifetime of
-# its MCP process, so zero established connections means no agent from any
-# session is attached.
+# Browser and watchdog run as one transient launchd job. This keeps them out of
+# the MCP launcher's process tree: after a crash, the deliberately failed MCP
+# launcher cannot take the restarted daemon down with it when its descendants
+# are cleaned up. The watchdog kills the browser after 5 minutes with no
+# attached CDP clients, so an idle daemon never outlives its fan-out. An agent
+# holds its CDP connection for exactly the lifetime of its MCP process, so zero
+# established connections means no agent from any session is attached.
 set -euo pipefail
 
 PORT=9377
@@ -99,18 +101,32 @@ watchdog() {
   done
 }
 
-# One watchdog per browser pid; the pid in the command line both prevents
-# duplicates and lets `status` find it.
-spawn_watchdog() {
-  if ! pgrep -f "shared-browser.sh watchdog $1" > /dev/null 2>&1; then
-    nohup "$DIR/shared-browser.sh" watchdog "$1" >> "$LOG" 2>&1 &
-  fi
+# Internal launchd job: browser and watchdog share one OS-owned lifetime. The
+# wrapper always exits cleanly after the browser ends so launchd does not turn a
+# crash into an unreported restart. Crash recovery remains `ensure`'s job.
+daemon() {
+  local fingerprint="$1" label="$2" browser_pid
+  exec >> "$LOG" 2>&1
+  /usr/sbin/taskpolicy -c utility "$BIN" \
+    --headless \
+    "--fingerprint=$fingerprint" \
+    --fingerprint-platform=macos \
+    --fingerprint-brand=Chrome \
+    "--remote-debugging-port=$PORT" \
+    "--user-data-dir=$PROFILE" \
+    --no-first-run &
+  browser_pid=$!
+  "$DIR/shared-browser.sh" watchdog "$browser_pid" &
+
+  set +e
+  wait "$browser_pid"
+  launchctl remove "$label"
 }
 
 start() {
   if alive; then
     OWNER="$(owner_pid)"
-    [ -n "$OWNER" ] && { mark_running; spawn_watchdog "$OWNER"; echo "shared browser already up: pid $OWNER, CDP http://localhost:$PORT"; exit 0; }
+    [ -n "$OWNER" ] && { mark_running; echo "shared browser already up: pid $OWNER, CDP http://localhost:$PORT"; exit 0; }
     echo "ERROR: a foreign CDP browser is serving port $PORT — refusing to share it (see: lsof -i :$PORT)" >&2
     exit 1
   fi
@@ -125,23 +141,19 @@ start() {
   [ -s "$SEED_FILE" ] || echo $(( $(od -An -N4 -tu4 /dev/urandom | tr -d ' ') % 100000000 )) > "$SEED_FILE"
   FINGERPRINT="$(cat "$SEED_FILE")"
   mkdir -p "$PROFILE"
-  # taskpolicy -c utility: every Chromium child inherits the QoS clamp, so
-  # headless work never competes with the user's foreground apps.
-  nohup taskpolicy -c utility "$BIN" \
-    --headless \
-    "--fingerprint=$FINGERPRINT" \
-    --fingerprint-platform=macos \
-    --fingerprint-brand=Chrome \
-    "--remote-debugging-port=$PORT" \
-    "--user-data-dir=$PROFILE" \
-    --no-first-run >> "$LOG" 2>&1 &
+  # A unique label preserves the existing concurrent-start design: competing
+  # jobs may launch, but Chromium's profile lock admits one and the others exit.
+  # taskpolicy in `daemon` QoS-clamps every Chromium child.
+  LABEL="com.lancelotlabs.browser-swarm.$PORT.$$.$RANDOM"
+  launchctl submit -l "$LABEL" -- \
+    "$DIR/shared-browser.sh" daemon "$FINGERPRINT" "$LABEL"
   for _ in $(seq 1 20); do
     if alive; then
       # The owner may be a concurrent `start`'s browser rather than our child
       # (ours loses the profile lock and dies) — either way the daemon is up,
       # which is all `start` promises.
       OWNER="$(owner_pid)"
-      [ -n "$OWNER" ] && { mark_running; spawn_watchdog "$OWNER"; echo "shared browser up: pid $OWNER, CDP http://localhost:$PORT"; exit 0; }
+      [ -n "$OWNER" ] && { mark_running; echo "shared browser up: pid $OWNER, CDP http://localhost:$PORT"; exit 0; }
       echo "ERROR: lost port $PORT to a foreign CDP browser while starting (see: lsof -i :$PORT)" >&2
       exit 1
     fi
@@ -226,6 +238,7 @@ case "${1:-}" in
   stop) stop ;;
   status) status ;;
   ensure) ensure ;; # internal, called by browser-swarm-mcp.sh
-  watchdog) watchdog "${2:?watchdog needs the browser pid}" ;; # internal, spawned by start
+  daemon) daemon "${2:?daemon needs the fingerprint seed}" "${3:?daemon needs the launchd label}" ;; # internal, owned by launchd
+  watchdog) watchdog "${2:?watchdog needs the browser pid}" ;; # internal, owned by the launchd daemon
   *) echo "usage: $0 start|stop|status" >&2; exit 2 ;;
 esac
