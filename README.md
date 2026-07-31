@@ -2,15 +2,17 @@
 
 One long-lived headless browser, shared by every agent in a fan-out.
 
-Give a coding agent a Playwright MCP server and each subagent launches its own browser. Ten parallel subagents is ten browsers, and on a laptop that is several gigabytes of renderer processes and a frozen machine. This repo replaces that with a single [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) daemon on a fixed CDP port; each agent attaches as its own isolated browser context, with its own cookies, storage, and tabs.
+Give an agent workflow a Playwright MCP server and each subagent launches its own browser. Ten parallel subagents is ten browser instances, and that is several gigabytes of renderer processes and a frozen machine. This repo replaces that with a single browser daemon on a fixed CDP port; each agent attaches as its own isolated browser context, with its own cookies, storage, and tabs.
 
-The MCP server is the standard pinned [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) — nothing here replaces or wraps it. What this repo adds is the daemon that makes sharing one browser safe, plus the agent definitions and operating rules that keep a fan-out from eating the machine.
+This uses [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) to imitate a real user so it doesn't get automatically blocked.
+
+The MCP server is the standard pinned [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) — nothing here replaces or wraps it. What this repo adds is the daemon that makes sharing one browser safe, plus the agent definitions and operating rules for an agent fan-out.
 
 macOS on Apple silicon only. The daemon uses `taskpolicy`, `lsof`, and a pinned macOS arm64 browser build.
 
 ## Install
 
-One command, no checkout needed — clones to `~/.browser-swarm`, installs the pinned MCP deps and the checksum-verified browser, and generates the Claude Code agent definitions:
+One command, clones to `~/.browser-swarm`, installs the pinned Playwright MCP and browser, and generates the Claude Code agent definitions:
 
 ```sh
 npx browser-swarm
