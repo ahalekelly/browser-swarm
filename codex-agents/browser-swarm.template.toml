@@ -1,5 +1,5 @@
-name = "browser-swarm-__N__"
-description = "__DESCRIPTION__"
+name = "browser-swarm"
+description = "Headless-browser agent for background web automation such as lookups, extraction, and form-driven flows. Each invocation owns a private isolated context in the shared BrowserSwarm daemon."
 model = "gpt-5.6-terra"
 model_reasoning_effort = "medium"
 sandbox_mode = "read-only"
@@ -19,4 +19,4 @@ Return raw findings such as values, quotes, and errors as your final message. Yo
 
 [mcp_servers.playwright]
 command = "__DIR__/browser-swarm-mcp.sh"
-args = ["__NODE__", "__N__"]
+args = ["__NODE__", "codex"]
