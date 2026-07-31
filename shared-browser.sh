@@ -16,12 +16,13 @@
 # the agent reports the crash to the orchestrator instead of silently papering
 # over it; the start clears the crash state, so every later agent — including
 # the sacrificed one relaunched — attaches normally.
-# Browser and watchdog run as one transient launchd job. This keeps them out of
-# the MCP launcher's process tree: after a crash, the deliberately failed MCP
-# launcher cannot take the restarted daemon down with it when its descendants
-# are cleaned up. The watchdog kills the browser after 5 minutes with no
-# attached CDP clients, so an idle daemon never outlives its fan-out. An agent
-# holds its CDP connection for exactly the lifetime of its MCP process, so zero
+# Browser and watchdog run as one non-restarting launchd service. This keeps
+# them out of the MCP launcher's process tree: after a crash, the deliberately
+# failed MCP launcher cannot take the restarted daemon down with it when its
+# descendants are cleaned up. The supervisor ends the whole service if either
+# child fails. The watchdog kills the browser after 5 minutes with no attached
+# CDP clients, so an idle daemon never outlives its fan-out. An agent holds its
+# CDP connection for exactly the lifetime of its MCP process, so zero
 # established connections means no agent from any session is attached.
 set -euo pipefail
 
@@ -40,6 +41,7 @@ SEED_FILE="$DIR/fingerprint-seed"
 # stop. Found still `running` with the daemon down and the boot unchanged,
 # the previous instance died unannounced: that is a crash.
 STATE_FILE="$DIR/daemon-state"
+LOCK_FILE="$DIR/browser-swarm.lock"
 IDLE_POLL=30  # seconds between watchdog polls
 IDLE_POLLS=10 # consecutive idle polls before auto-stop (10 × 30s = 5 min)
 
@@ -82,10 +84,9 @@ crashed() {
   [ "$state" = "running" ] && [ "$boot" = "$(boot_epoch)" ]
 }
 
-# Internal verb, spawned detached by `start`: stop the browser after
-# IDLE_POLLS consecutive polls with no attached clients. Pid-bound — it
-# exits the moment its browser is no longer the owned listener, so a stale
-# watchdog never touches a newer browser.
+# Internal launchd child: stop the browser after IDLE_POLLS consecutive polls
+# with no attached clients. Pid-bound — it exits the moment its browser is no
+# longer the owned listener, so a stale watchdog never touches a newer browser.
 watchdog() {
   local browser_pid="$1" idle=0
   echo "$(date '+%F %T') watchdog: watching browser pid $browser_pid"
@@ -101,36 +102,137 @@ watchdog() {
   done
 }
 
-# Internal launchd job: browser and watchdog share one OS-owned lifetime. The
-# wrapper always exits cleanly after the browser ends so launchd does not turn a
-# crash into an unreported restart. Crash recovery remains `ensure`'s job.
+process_alive() {
+  local state
+  state="$(ps -o state= -p "$1" 2> /dev/null | tr -d ' ')"
+  [ -n "$state" ] && [ "${state#Z}" = "$state" ]
+}
+
+watchdog_pid() {
+  local pid
+  for pid in $(pgrep -f "shared-browser.sh watchdog $1" || true); do
+    process_alive "$pid" && { echo "$pid"; return; }
+  done
+}
+
+configure_job() {
+  FINGERPRINT="$(cat "$SEED_FILE")"
+  LABEL="com.lancelotlabs.browser-swarm.$PORT.$FINGERPRINT"
+  SERVICE="gui/$(id -u)/$LABEL"
+  PLIST="$PROFILE/browser-swarm.plist"
+}
+
+job_loaded() { launchctl print "$SERVICE" > /dev/null 2>&1; }
+
+write_job() {
+  local temp="$PROFILE/browser-swarm.$$.plist"
+  plutil -create xml1 "$temp"
+  plutil -insert Label -string "$LABEL" "$temp"
+  plutil -insert ProgramArguments -array "$temp"
+  plutil -insert ProgramArguments.0 -string "$DIR/shared-browser.sh" "$temp"
+  plutil -insert ProgramArguments.1 -string daemon "$temp"
+  plutil -insert RunAtLoad -bool true "$temp"
+  plutil -insert KeepAlive -bool false "$temp"
+  plutil -insert AbandonProcessGroup -bool false "$temp"
+  plutil -insert ProcessType -string Background "$temp"
+  mv "$temp" "$PLIST"
+}
+
+profile_pids() {
+  local pid
+  for pid in $(pgrep -f "user-data-dir=$PROFILE" || true); do
+    ps -o command= -p "$pid" 2> /dev/null | grep -qF -- "--user-data-dir=$PROFILE" && echo "$pid"
+  done
+}
+
+# Unload only this installation's service, then remove any owned browser left
+# behind by an interrupted or pre-service launch. A foreign port listener never
+# names our profile and is therefore outside this cleanup boundary.
+cleanup_job() {
+  local error pid
+  if job_loaded; then
+    if ! error="$(launchctl bootout "$SERVICE" 2>&1)" && job_loaded; then
+      echo "ERROR: could not unload BrowserSwarm service $LABEL: $error" >&2
+      return 1
+    fi
+  fi
+  for pid in $(profile_pids); do kill "$pid" 2> /dev/null || true; done
+  for _ in $(seq 1 20); do
+    [ -z "$(profile_pids)" ] && return 0
+    sleep 0.5
+  done
+  echo "ERROR: owned BrowserSwarm processes survived service cleanup: $(profile_pids | tr '\n' ' ')" >&2
+  return 1
+}
+
+load_job() {
+  local error
+  write_job
+  if ! error="$(launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>&1)"; then
+    echo "ERROR: could not load BrowserSwarm service $LABEL: $error" >&2
+    cleanup_job
+    return 1
+  fi
+}
+
+# Internal launchd supervisor. KeepAlive=false makes every exit final; launchd
+# also owns the process group and kills both children if the supervisor itself
+# dies. Once ready, loss of either child ends the other within one poll.
 daemon() {
-  local fingerprint="$1" label="$2" browser_pid
+  local browser_pid watchdog
   exec >> "$LOG" 2>&1
+  [ -s "$SEED_FILE" ] || { echo "ERROR: fingerprint seed is missing"; exit 1; }
+  FINGERPRINT="$(cat "$SEED_FILE")"
   /usr/sbin/taskpolicy -c utility "$BIN" \
     --headless \
-    "--fingerprint=$fingerprint" \
+    "--fingerprint=$FINGERPRINT" \
     --fingerprint-platform=macos \
     --fingerprint-brand=Chrome \
     "--remote-debugging-port=$PORT" \
     "--user-data-dir=$PROFILE" \
     --no-first-run &
   browser_pid=$!
+  for _ in $(seq 1 20); do
+    [ "$(owner_pid)" = "$browser_pid" ] && break
+    kill -0 "$browser_pid" 2> /dev/null || break
+    sleep 0.5
+  done
+  if [ "$(owner_pid)" != "$browser_pid" ]; then
+    kill "$browser_pid" 2> /dev/null || true
+    wait "$browser_pid" 2> /dev/null || true
+    echo "ERROR: browser did not become the owned CDP listener"
+    exit 1
+  fi
   "$DIR/shared-browser.sh" watchdog "$browser_pid" &
-
+  watchdog=$!
+  while [ "$(owner_pid)" = "$browser_pid" ] && process_alive "$watchdog"; do sleep 1; done
   set +e
-  wait "$browser_pid"
-  launchctl remove "$label"
+  kill "$browser_pid" "$watchdog" 2> /dev/null
+  wait "$browser_pid" "$watchdog" 2> /dev/null
+  exit 0
 }
 
 start() {
   if alive; then
     OWNER="$(owner_pid)"
-    [ -n "$OWNER" ] && { mark_running; echo "shared browser already up: pid $OWNER, CDP http://localhost:$PORT"; exit 0; }
-    echo "ERROR: a foreign CDP browser is serving port $PORT — refusing to share it (see: lsof -i :$PORT)" >&2
-    exit 1
+    if [ -n "$OWNER" ] && [ -n "$(watchdog_pid "$OWNER")" ]; then
+      mark_running
+      echo "shared browser already up: pid $OWNER, CDP http://localhost:$PORT"
+      exit 0
+    fi
+    if [ -n "$OWNER" ]; then
+      [ -s "$SEED_FILE" ] || { echo "ERROR: owned browser has no fingerprint seed" >&2; exit 1; }
+      configure_job
+      echo "warning: owned browser has no watchdog — restarting the supervised service" >&2
+      cleanup_job
+    else
+      [ -s "$SEED_FILE" ] && { configure_job; cleanup_job; }
+      echo "ERROR: a foreign CDP browser is serving port $PORT — refusing to share it (see: lsof -i :$PORT)" >&2
+      exit 1
+    fi
   fi
   if lsof -i ":$PORT" -sTCP:LISTEN > /dev/null 2>&1; then
+    [ -s "$SEED_FILE" ] && { configure_job; cleanup_job; }
     echo "ERROR: port $PORT is taken by a non-CDP process:" >&2
     lsof -i ":$PORT" -sTCP:LISTEN >&2
     exit 1
@@ -139,26 +241,31 @@ start() {
   [ -x "$BIN" ] || { echo "ERROR: fingerprint-chromium is not installed (run $DIR/install-fingerprint-chromium.sh)" >&2; exit 1; }
   # Modulo keeps the seed inside int32, which is what Chromium's flag parser takes.
   [ -s "$SEED_FILE" ] || echo $(( $(od -An -N4 -tu4 /dev/urandom | tr -d ' ') % 100000000 )) > "$SEED_FILE"
-  FINGERPRINT="$(cat "$SEED_FILE")"
   mkdir -p "$PROFILE"
-  # A unique label preserves the existing concurrent-start design: competing
-  # jobs may launch, but Chromium's profile lock admits one and the others exit.
-  # taskpolicy in `daemon` QoS-clamps every Chromium child.
-  LABEL="com.lancelotlabs.browser-swarm.$PORT.$$.$RANDOM"
-  launchctl submit -l "$LABEL" -- \
-    "$DIR/shared-browser.sh" daemon "$FINGERPRINT" "$LABEL"
+  configure_job
+  cleanup_job
+  load_job
   for _ in $(seq 1 20); do
     if alive; then
-      # The owner may be a concurrent `start`'s browser rather than our child
-      # (ours loses the profile lock and dies) — either way the daemon is up,
-      # which is all `start` promises.
       OWNER="$(owner_pid)"
-      [ -n "$OWNER" ] && { mark_running; echo "shared browser up: pid $OWNER, CDP http://localhost:$PORT"; exit 0; }
+      if [ -n "$OWNER" ] && [ -n "$(watchdog_pid "$OWNER")" ]; then
+        mark_running
+        echo "shared browser up: pid $OWNER, CDP http://localhost:$PORT"
+        exit 0
+      fi
+      [ -n "$OWNER" ] && { sleep 0.5; continue; }
+      cleanup_job
       echo "ERROR: lost port $PORT to a foreign CDP browser while starting (see: lsof -i :$PORT)" >&2
+      exit 1
+    fi
+    if lsof -i ":$PORT" -sTCP:LISTEN > /dev/null 2>&1; then
+      cleanup_job
+      echo "ERROR: lost port $PORT to a foreign process while starting (see: lsof -i :$PORT)" >&2
       exit 1
     fi
     sleep 0.5
   done
+  cleanup_job
   echo "ERROR: browser did not answer on port $PORT within 10s; last log lines:" >&2
   tail -5 "$LOG" >&2
   exit 1
@@ -166,23 +273,25 @@ start() {
 
 stop() {
   OWNER="$(owner_pid)"
-  if [ -z "$OWNER" ]; then
-    if alive; then
-      echo "ERROR: the CDP browser on port $PORT is not ours — refusing to kill it (see: lsof -i :$PORT)" >&2
-      exit 1
-    fi
+  if alive && [ -z "$OWNER" ]; then
+    [ -s "$SEED_FILE" ] && { configure_job; cleanup_job; }
+    echo "ERROR: the CDP browser on port $PORT is not ours — refusing to kill it (see: lsof -i :$PORT)" >&2
+    exit 1
+  fi
+  if [ -s "$SEED_FILE" ]; then
+    configure_job
+    [ -n "$OWNER" ] && mark_clean
+    cleanup_job
+  elif [ -n "$OWNER" ]; then
+    echo "ERROR: owned browser has no fingerprint seed" >&2
+    exit 1
+  fi
+  if [ -n "$OWNER" ]; then
+    echo "shared browser stopped"
+  else
     crashed && { echo "note: previous instance shut down uncleanly — clearing crash state"; mark_clean; }
     echo "shared browser already stopped"
-    exit 0
   fi
-  mark_clean
-  kill "$OWNER"
-  for _ in $(seq 1 20); do
-    kill -0 "$OWNER" 2> /dev/null || { echo "shared browser stopped"; exit 0; }
-    sleep 0.5
-  done
-  echo "ERROR: pid $OWNER still alive after 10s" >&2
-  exit 1
 }
 
 status() {
@@ -200,7 +309,7 @@ status() {
   echo "pid: $OWNER"
   # head -1: the watchdog's own command substitutions fork subshells that
   # briefly match the same pattern.
-  WD="$(pgrep -f "shared-browser.sh watchdog $OWNER" | head -1 || true)"
+  WD="$(watchdog_pid "$OWNER")"
   if [ -n "$WD" ]; then
     echo "watchdog: pid $WD (auto-stop after $((IDLE_POLL * IDLE_POLLS))s with no attached clients)"
   else
@@ -233,12 +342,17 @@ ensure() {
   start
 }
 
+locked() { exec /usr/bin/lockf -k "$LOCK_FILE" "$DIR/shared-browser.sh" "_$1"; }
+
 case "${1:-}" in
-  start) start ;;
-  stop) stop ;;
+  start) locked start ;;
+  stop) locked stop ;;
   status) status ;;
-  ensure) ensure ;; # internal, called by browser-swarm-mcp.sh
-  daemon) daemon "${2:?daemon needs the fingerprint seed}" "${3:?daemon needs the launchd label}" ;; # internal, owned by launchd
+  ensure) locked ensure ;; # called by browser-swarm-mcp.sh
+  _start) start ;; # internal, holding the control lock
+  _stop) stop ;; # internal, holding the control lock
+  _ensure) ensure ;; # internal, holding the control lock
+  daemon) daemon ;; # internal, owned by launchd
   watchdog) watchdog "${2:?watchdog needs the browser pid}" ;; # internal, owned by the launchd daemon
   *) echo "usage: $0 start|stop|status" >&2; exit 2 ;;
 esac

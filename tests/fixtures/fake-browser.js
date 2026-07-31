@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 const http = require("node:http");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const portArgument = process.argv.find((argument) =>
   argument.startsWith("--remote-debugging-port="),
@@ -23,4 +25,11 @@ const server = http.createServer((request, response) => {
   response.end("{}");
 });
 
-server.listen(port, "127.0.0.1");
+const immediate = process.argv.includes("--immediate");
+if (!immediate && fs.existsSync(path.join(__dirname, "never-listen"))) {
+  setInterval(() => {}, 60_000);
+} else if (!immediate && fs.existsSync(path.join(__dirname, "delay-start"))) {
+  setTimeout(() => server.listen(port, "127.0.0.1"), 2_000);
+} else {
+  server.listen(port, "127.0.0.1");
+}
