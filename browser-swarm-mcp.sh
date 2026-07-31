@@ -1,9 +1,10 @@
 #!/bin/bash
 # MCP entry point for the browser-swarm agent definitions: brings the shared
-# daemon up if it stopped cleanly, then replaces itself with the pinned
-# Playwright MCP attached to it. A crashed daemon is not auto-started —
-# `ensure` fails, this script exits, and the agent's browser tools surface the
-# crash to the orchestrator instead of hiding it behind a fresh browser.
+# daemon up, then replaces itself with the pinned Playwright MCP attached to
+# it. After a daemon crash, `ensure` restarts the browser but exits nonzero —
+# this script dies with it, sacrificing this one agent's MCP so the agent
+# reports the crash to the orchestrator instead of hiding it behind a fresh
+# browser; relaunching the agent attaches normally.
 # Everything before exec writes to stderr: stdout is the MCP stdio channel.
 set -euo pipefail
 NODE="${1:?usage: browser-swarm-mcp.sh <node-path> <agent-number>}"
