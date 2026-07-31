@@ -1,11 +1,19 @@
 {
   "name": "browser-leaf",
-  "private": true,
+  "version": "0.1.0",
+  "description": "One shared headless browser for every agent in a fan-out — npx installer",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ahalekelly/browser-leaf.git"
+  },
+  "os": ["darwin"],
+  "cpu": ["arm64"],
   "bin": {
     "browser-leaf": "./install.sh"
   },
-  "dependencies": {
+  "files": ["install.sh"],
+  "devDependencies": {
     "@playwright/mcp": "^0.0.78"
   }
 }
