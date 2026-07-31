@@ -26,6 +26,7 @@ cd browser-swarm
 npm ci                              # pinned @playwright/mcp
 ./install-fingerprint-chromium.sh   # one-time browser install, checksum-verified
 ./claude-agents/install-agents.sh   # generate the agent definitions
+./codex-agents/install-agents.sh
 ```
 
 ## Use
@@ -50,9 +51,9 @@ Both scripts must run outside any sandbox — Chromium can't write its crashpad 
 
 ## Agent definitions
 
-[`claude-agents/`](claude-agents/) holds the Claude Code subagent definitions: five sibling `browser-swarm` types (`browser-swarm-1` … `browser-swarm-5`) that attach to the daemon, and a launched-mode Firefox variant for sites where Chromium is blocked. `install-agents.sh` generates the siblings into `~/.claude/agents/` (the npx install already ran it); the Firefox variant is copied by hand.
+[`claude-agents/`](claude-agents/) holds the Claude Code subagent definitions, and [`codex-agents/`](codex-agents/) holds the Codex custom-agent definitions. Each provides five sibling `browser-swarm` types (`browser-swarm-1` … `browser-swarm-5`) that attach to the daemon. Their `install-agents.sh` scripts generate the siblings into `~/.claude/agents/` and `~/.codex/agents/`; the npx install runs both. The Claude directory also includes a launched-mode Firefox variant for sites where Chromium is blocked, copied by hand.
 
-They must be five near-identical files rather than one, because Claude Code deduplicates inline MCP server configs by content across concurrent subagents — see [docs/claude-code-mcp-dedup.md](docs/claude-code-mcp-dedup.md). Each sibling's config differs only in its `--output-dir`, which is what defeats the dedup. "Cleaning up" those paths to match silently reintroduces one shared browser for every agent.
+The Claude definitions must be five near-identical files rather than one because Claude Code deduplicates inline MCP server configs by content across concurrent subagents — see [docs/claude-code-mcp-dedup.md](docs/claude-code-mcp-dedup.md). Across both clients, distinct slots also keep output directories separate during a fan-out.
 
 The system prompt in those files carries the operating rules that matter in practice: headless only, read-only unless the task explicitly authorizes otherwise, writes confined to a temp output dir, and the tab cap below.
 

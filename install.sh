@@ -3,7 +3,7 @@
 #   npx browser-swarm
 # Clones the repo to ~/.browser-swarm (or fast-forwards an existing clone),
 # installs the pinned MCP dependencies and the checksum-verified browser, and
-# generates the Claude Code agent definitions. It installs a real clone
+# generates the Claude Code and Codex agent definitions. It installs a real clone
 # rather than running from npx's cache because the agent definitions embed
 # absolute paths that must stay valid: the cache is content-addressed,
 # prunable, and re-fetched — everything a definition must not point into.
@@ -27,6 +27,7 @@ cd "$TARGET"
 npm ci
 ./install-fingerprint-chromium.sh
 ./claude-agents/install-agents.sh
+./codex-agents/install-agents.sh
 
 echo
 echo "BrowserSwarm installed at $TARGET"
