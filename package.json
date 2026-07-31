@@ -1,0 +1,8 @@
+{
+  "name": "browser-leaf",
+  "private": true,
+  "license": "MIT",
+  "dependencies": {
+    "@playwright/mcp": "^0.0.78"
+  }
+}
