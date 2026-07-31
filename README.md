@@ -37,7 +37,7 @@ Both scripts must run outside any sandbox — Chromium can't write its crashpad 
 
 ## Agent definitions
 
-[`examples/claude-code/`](examples/claude-code/) holds ready-to-use Claude Code subagent definitions: five sibling `browser-leaf` types that attach to the daemon, and a launched-mode Firefox variant for sites where Chromium is blocked. Copy them to `~/.claude/agents/` and set the paths.
+[`claude-agents/`](claude-agents/) holds ready-to-use Claude Code subagent definitions: five sibling `browser-leaf` types that attach to the daemon, and a launched-mode Firefox variant for sites where Chromium is blocked. Copy them to `~/.claude/agents/` and set the paths.
 
 They must be five near-identical files rather than one, because Claude Code deduplicates inline MCP server configs by content across concurrent subagents — see [docs/claude-code-mcp-dedup.md](docs/claude-code-mcp-dedup.md). Each sibling's config differs only in its `--output-dir`, which is what defeats the dedup. "Cleaning up" those paths to match silently reintroduces one shared browser for every leaf.
 

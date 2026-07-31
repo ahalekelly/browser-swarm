@@ -6,10 +6,10 @@
 set -euo pipefail
 
 LEAVES=5
-DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
 NODE="$(command -v node)"
 AGENTS="$HOME/.claude/agents"
-TEMPLATE="$DIR/examples/claude-code/browser-leaf.template.md"
+TEMPLATE="$DIR/claude-agents/browser-leaf.template.md"
 PRIMARY_DESCRIPTION="Headless-browser leaf agent for background web automation (lookups, extractions, form-driven flows). Owns a private isolated context in the shared headless browser daemon (start it first: $DIR/shared-browser.sh start), but only one concurrent invocation per leaf type — Claude Code shares identical inline MCP server configs across concurrent subagents, so run parallel leaves on distinct types (browser-leaf, browser-leaf-2 … browser-leaf-5, one type per concurrent leaf)."
 SECONDARY_DESCRIPTION="Additional browser-leaf concurrency slot with a distinct MCP session. See browser-leaf for usage."
 
