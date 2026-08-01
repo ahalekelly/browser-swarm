@@ -6,13 +6,13 @@ Give an agent workflow a Playwright MCP server and each subagent launches its ow
 
 This uses [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) to imitate a real user so it doesn't get automatically blocked.
 
-The MCP server is the standard pinned [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) — nothing here replaces or wraps it. What this repo adds is the daemon that makes sharing one browser safe, plus the agent definitions and operating rules for an agent fan-out.
+The MCP tools and wire protocol come from the standard pinned [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp). A transparent stdio supervisor gives each MCP session a five-minute inactivity lease; it forwards the pinned server's protocol unchanged and owns only that server process's lifetime. The repo also provides the daemon that makes sharing one browser safe, plus the agent definitions and operating rules for an agent fan-out.
 
 macOS on Apple silicon only. The daemon uses `taskpolicy`, `lsof`, and a pinned macOS arm64 browser build.
 
 ## Install
 
-One command, clones to `~/.browser-swarm`, installs the pinned Playwright MCP and browser, and generates the Claude Code agent definitions:
+One command, clones to `~/.browser-swarm`, installs the pinned Playwright MCP and browser, and generates the Claude Code and Codex agent definitions:
 
 ```sh
 npx browser-swarm
@@ -49,6 +49,12 @@ Point any Playwright MCP instance at it:
 
 Both scripts must run outside any sandbox — Chromium can't write its crashpad and profile files inside one, and a sandbox with no network can't fetch the browser.
 
+Run the MCP-session and installer tests after `npm ci`:
+
+```sh
+npm test
+```
+
 ## Agent definitions
 
 [`claude-agents/`](claude-agents/) holds five sibling Claude Code subagent definitions (`browser-swarm-1` … `browser-swarm-5`), while [`codex-agents/`](codex-agents/) holds one reusable Codex custom-agent definition (`browser-swarm`). Their `install-agents.sh` scripts generate the definitions into `~/.claude/agents/` and `~/.codex/agents/`; the npx install runs both. The Claude directory also includes a launched-mode Firefox variant for sites where Chromium is blocked, copied by hand.
@@ -63,13 +69,17 @@ The system prompt in those files carries the operating rules that matter in prac
 
 **Reach for a browser last.** A purpose-built MCP or API first, then web search, which on most sites returns page text and so covers plain reading. A browser is the right tool for interaction — forms, carts, configurators, authenticated flows — and for sites that starve the cheaper paths, where search sees only a page title and a plain fetch gets a body-less shell. It costs far more tokens and wall-clock than either, and it is the only path a bot wall can block.
 
+**Relaunch an agent after an idle disconnect.** An initialized MCP session closes after five minutes without MCP activity. Browser agents are disposable: if browser tools are needed after that gap, the orchestrator launches a fresh agent with a fresh isolated context.
+
 ## How it works
 
 **Port 9377, not CDP's default 9222.** The daemon never contends with a legitimate 9222 user (IDE debuggers, a Chrome launched with `--remote-debugging-port`), and an agent spawning while the daemon is down finds the port closed instead of silently attaching to whatever debug browser happens to be listening — the attaching MCP client does no ownership check. Accepted risk: the CDP port is unauthenticated, so any local process can drive the shared browser. Fine on a single-user machine.
 
 **Ownership is derived from the port, not a pidfile.** The listener on 9377 whose command line names this repo's profile dir is ours. That makes `start` safe under concurrent invocation — the race loser's Chromium dies on the profile lock and reports the winner's daemon — lets `stop` find orphaned daemons, and makes any *foreign* process on 9377 a hard error on every verb. `start` refuses to share it, since agents must never attach to a visible browser, and `stop` refuses to kill it.
 
-**Idle auto-stop.** `start` also spawns a watchdog that counts established connections to the CDP port every 30s and kills the browser after 5 minutes at zero. An MCP instance holds its CDP connection for exactly the lifetime of its process, so zero clients means nothing is attached. Connections are the signal rather than contexts or pages because an agent between tabs has neither, and a pageless context created by another CDP connection is invisible to Playwright's `contexts()`. Known gap: a wedged agent whose MCP process never exits keeps its connection and defers auto-stop indefinitely; `status` shows the attached-client count.
+**Per-session idle reaping.** `browser-swarm-mcp.sh` runs the pinned MCP under `mcp-session.js`. The lease begins when the client completes the initialization handshake with `notifications/initialized`, so a slow or failed startup is never reaped. Each MCP request, response, or notification renews the five-minute lease, and an in-flight request suspends it. On expiry the supervisor closes the MCP's stdin, then terminates that exact child if graceful shutdown stalls. Closing the MCP drops its CDP connection and isolated context without touching sibling sessions. The supervisor does not inject a warning into the MCP protocol; the agent definitions carry the relaunch instruction, and the closed transport makes later browser calls fail.
+
+**Daemon idle auto-stop.** `start` also spawns a watchdog that counts established connections to the CDP port every 30s and kills the browser after 5 minutes at zero. An MCP instance holds its CDP connection for exactly the lifetime of its process, so zero clients means nothing is attached. Connections are the signal rather than contexts or pages because an agent between tabs has neither, and a pageless context created by another CDP connection is invisible to Playwright's `contexts()`. `status` shows the attached-client count.
 
 Because the daemon is machine-wide, an orchestrator should not run `stop` after a fan-out — another session's agents may still be attached, and shutdown is the watchdog's job.
 
