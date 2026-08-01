@@ -7,7 +7,13 @@ set -euo pipefail
 
 SWARM_SIZE=5
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-NODE="$(command -v node)"
+. "$DIR/agent-paths.sh"
+require_safe_agent_path "BrowserSwarm checkout" "$DIR"
+if ! NODE="$(command -v node)"; then
+  echo "ERROR: Node.js is required to install the Claude Code agents" >&2
+  exit 1
+fi
+require_safe_agent_path "Node.js executable" "$NODE"
 AGENTS="$HOME/.claude/agents"
 TEMPLATE="$DIR/claude-agents/browser-swarm.template.md"
 PRIMARY_DESCRIPTION="Headless-browser swarm agent for background web automation (lookups, extractions, form-driven flows). Owns a private isolated context in the shared headless browser daemon, which auto-starts on first use — even after a crash, though the first agent attaching after one comes up without browser tools and reports the crash (relaunch that agent). Only one concurrent invocation per agent type — Claude Code shares identical inline MCP server configs across concurrent subagents, so run parallel agents on distinct types (browser-swarm-1 … browser-swarm-5, one type per concurrent agent)."
