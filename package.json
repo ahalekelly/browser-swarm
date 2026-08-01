@@ -12,6 +12,9 @@
   "bin": {
     "browser-swarm": "./install.sh"
   },
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
   "files": ["install.sh"],
   "devDependencies": {
     "@playwright/mcp": "^0.0.78"

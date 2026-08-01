@@ -53,7 +53,7 @@ Both scripts must run outside any sandbox — Chromium can't write its crashpad 
 
 [`claude-agents/`](claude-agents/) holds five sibling Claude Code subagent definitions (`browser-swarm-1` … `browser-swarm-5`), while [`codex-agents/`](codex-agents/) holds one reusable Codex custom-agent definition (`browser-swarm`). Their `install-agents.sh` scripts generate the definitions into `~/.claude/agents/` and `~/.codex/agents/`; the npx install runs both. The Claude directory also includes a launched-mode Firefox variant for sites where Chromium is blocked, copied by hand.
 
-The Claude definitions must be five near-identical files rather than one because Claude Code deduplicates inline MCP server configs by content across concurrent subagents — see [docs/claude-code-mcp-dedup.md](docs/claude-code-mcp-dedup.md). Codex launches a separate MCP session and isolated browser context for each invocation of the reusable definition.
+The Claude definitions must be five near-identical files rather than one because Claude Code deduplicates inline MCP server configs by content across concurrent subagents — see [docs/claude-code-mcp-dedup.md](docs/claude-code-mcp-dedup.md). Codex launches a separate MCP session, isolated browser context, and persistent temporary output directory for each invocation of the reusable definition.
 
 The system prompt in those files carries the operating rules that matter in practice: headless only, read-only unless the task explicitly authorizes otherwise, writes confined to a temp output dir, and the tab cap below.
 
