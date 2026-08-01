@@ -2,7 +2,7 @@
 # Generate the sibling browser-swarm agent definitions into ~/.claude/agents/.
 # The siblings exist because Claude Code deduplicates inline MCP server configs
 # by content across concurrent subagents (docs/claude-code-mcp-dedup.md), so
-# each one's --output-dir must stay distinct. Generating them keeps that true.
+# each one's launcher identifier must stay distinct. Generating them keeps that true.
 set -euo pipefail
 
 SWARM_SIZE=5

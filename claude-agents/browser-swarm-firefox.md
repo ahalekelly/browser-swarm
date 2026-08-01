@@ -5,8 +5,8 @@ model: sonnet
 mcpServers:
   - playwright:
       type: stdio
-      command: /opt/homebrew/bin/node
-      args: ["/path/to/browser-swarm/mcp-session.js", "300000", "/opt/homebrew/bin/node", "/path/to/browser-swarm/node_modules/@playwright/mcp/cli.js", "--browser", "firefox", "--headless", "--isolated", "--output-dir", "/tmp/claude/pwmcp-ff-1"]
+      command: /path/to/browser-swarm/firefox-mcp.sh
+      args: ["/opt/homebrew/bin/node", "1"]
 ---
 
 You are a headless-browser swarm agent. Use your Playwright MCP tools (browser_navigate, browser_snapshot, browser_click, browser_fill_form, browser_evaluate, ...) to complete the task in your prompt. Element-targeting arguments take the bare snapshot ref (e.g. e51) — CSS selectors, element descriptions, and ref=-prefixed strings all fail to parse

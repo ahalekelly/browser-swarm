@@ -21,8 +21,8 @@ test('each Codex launcher invocation gets a persistent private output directory'
   copyExecutable(fixture, 'shared-browser.sh', '#!/bin/bash\nexit 0\n');
   const node = copyExecutable(fixture, 'node', '#!/bin/bash\nprintf "%s\\n" "$@" > "$ARG_LOG"\n');
 
-  const first = launch(launcher, node, path.join(fixture, 'first-args'));
-  const second = launch(launcher, node, path.join(fixture, 'second-args'));
+  const first = launch(launcher, node, 'codex', path.join(fixture, 'first-args'));
+  const second = launch(launcher, node, 'codex', path.join(fixture, 'second-args'));
   const directories = [first, second].map(outputDirectory);
   outputDirectories.push(...directories);
 
@@ -34,8 +34,46 @@ test('each Codex launcher invocation gets a persistent private output directory'
 
 });
 
-function launch(launcher, node, argumentLog) {
-  const result = spawnSync(launcher, [node, 'codex'], {
+test('each Firefox launcher invocation preserves supervision and gets a persistent private output directory', (t) => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-firefox-launcher-'));
+  const outputDirectories = [];
+  t.after(() => {
+    for (const directory of outputDirectories) {
+      if (directory.startsWith('/tmp/claude/pwmcp-ff-1.')) fs.rmdirSync(directory);
+    }
+    for (const entry of fs.readdirSync(fixture)) fs.unlinkSync(path.join(fixture, entry));
+    fs.rmdirSync(fixture);
+  });
+  const launcher = copyExecutable(fixture, 'firefox-mcp.sh');
+  const node = copyExecutable(fixture, 'node', '#!/bin/bash\nprintf "%s\\n" "$@" > "$ARG_LOG"\n');
+
+  const first = launch(launcher, node, '1', path.join(fixture, 'first-args'));
+  const second = launch(launcher, node, '1', path.join(fixture, 'second-args'));
+  const directories = [first, second].map(outputDirectory);
+  outputDirectories.push(...directories);
+
+  const expectedSupervisorArgs = [
+    path.join(fixture, 'mcp-session.js'),
+    '300000',
+    node,
+    path.join(fixture, 'node_modules/@playwright/mcp/cli.js'),
+    '--browser',
+    'firefox',
+    '--headless',
+    '--isolated',
+    '--output-dir',
+  ];
+  assert.deepEqual(first.slice(0, -1), expectedSupervisorArgs);
+  assert.deepEqual(second.slice(0, -1), expectedSupervisorArgs);
+  assert.notEqual(directories[0], directories[1]);
+  for (const directory of directories) {
+    assert.match(directory, /^\/tmp\/claude\/pwmcp-ff-1\.[A-Za-z0-9]+$/);
+    assert.equal(fs.statSync(directory).isDirectory(), true, 'output directory did not outlive its launcher');
+  }
+});
+
+function launch(launcher, node, agentId, argumentLog) {
+  const result = spawnSync(launcher, [node, agentId], {
     encoding: 'utf8',
     env: { ...process.env, ARG_LOG: argumentLog },
   });

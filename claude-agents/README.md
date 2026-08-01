@@ -12,4 +12,4 @@ The five siblings are identical except for their name and launcher identifier, a
 
 An initialized agent's MCP session closes after five minutes without activity. Relaunch the agent when browser tools are needed again; the fresh session gets a fresh isolated context.
 
-`browser-swarm-firefox.md` is a separate, hand-edited example: headless Firefox for the sites that block Chromium ([../docs/bot-detection.md](../docs/bot-detection.md)). It launches its own browser instead of attaching to the daemon, because CDP is Chromium-only. Fill in the two paths before using it.
+`browser-swarm-firefox.md` is a separate, hand-edited example: headless Firefox for the sites that block Chromium ([../docs/bot-detection.md](../docs/bot-detection.md)). Its launcher starts a supervised browser with a private persistent output directory instead of attaching to the daemon, because CDP is Chromium-only. Fill in the launcher and Node.js paths before using it.
