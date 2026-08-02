@@ -14,13 +14,13 @@ Related upstream reports: [playwright-mcp#893](https://github.com/microsoft/play
 
 ## The workaround
 
-Make each concurrent subagent's server config unique. The sibling agent definitions in [`claude-agents/`](../claude-agents/) are identical except for `name:` and a per-type `--output-dir`, which is enough to defeat the dedup (and also moves the MCP's artifact droppings out of the working directory).
+Make each concurrent subagent's server config unique. The sibling agent definitions in [`claude-agents/`](../claude-agents/) are identical except for `name:` and a per-type agent-tag argument to the MCP launcher (which also names the session's `--output-dir`), which is enough to defeat the dedup (and also moves the MCP's artifact droppings out of the working directory).
 
 Verified at 5× concurrency: five subagents on five distinct sites, each listing its full tab set three times at 15s intervals, gave 15/15 clean listings — no agent ever saw another's tab — against five separate server processes.
 
 Two things this costs:
 
 - **Concurrency is capped at the number of sibling types.** Two concurrent invocations of the *same* type still share a browser, so the orchestrator must assign types round-robin. More siblings can be added mechanically.
-- **The files must stay in sync, and their configs must stay different.** Normalizing the `--output-dir` values to match silently reintroduces the shared browser.
+- **The files must stay in sync, and their configs must stay different.** Normalizing the per-type arguments to match silently reintroduces the shared browser.
 
 If Claude Code later makes per-instance connections match the documentation, the unique configs stay harmless.
