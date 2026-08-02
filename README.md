@@ -55,7 +55,7 @@ Both scripts must run outside any sandbox — Chromium can't write its crashpad 
 
 The Claude definitions must be five near-identical files rather than one because Claude Code deduplicates inline MCP server configs by content across concurrent subagents — see [docs/claude-code-mcp-dedup.md](docs/claude-code-mcp-dedup.md). Codex launches a separate MCP session and isolated browser context for each invocation of the reusable definition.
 
-The system prompt in those files carries the operating rules that matter in practice: headless only, read-only unless the task explicitly authorizes otherwise, writes confined to a temp output dir, and the tab cap below.
+The system prompt in those files is spliced in from [agent-prompt.md](agent-prompt.md), the single source for the operating rules that matter in practice: headless only, read-only unless the task explicitly authorizes otherwise, writes confined to a temp output dir, and the tab cap below.
 
 ## Operating rules
 

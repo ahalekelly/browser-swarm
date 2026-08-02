@@ -1,8 +1,9 @@
 #!/bin/bash
-# Generate the sibling browser-swarm agent definitions into ~/.claude/agents/.
+# Generate the sibling browser-swarm agent definitions into ~/.claude/agents/,
+# splicing the shared system prompt (../agent-prompt.md) into the template.
 # The siblings exist because Claude Code deduplicates inline MCP server configs
 # by content across concurrent subagents (docs/claude-code-mcp-dedup.md), so
-# each one's --output-dir must stay distinct. Generating them keeps that true.
+# each one's launcher argument must stay distinct. Generating them keeps that true.
 set -euo pipefail
 
 SWARM_SIZE=5
@@ -17,7 +18,8 @@ mkdir -p "$AGENTS"
 for n in $(seq 1 "$SWARM_SIZE"); do
   # browser-swarm-1 carries the full description; the rest point back to it.
   if [ "$n" = 1 ]; then DESCRIPTION="$PRIMARY_DESCRIPTION"; else DESCRIPTION="$SECONDARY_DESCRIPTION"; fi
-  sed -e "s|__DIR__|$DIR|g" -e "s|__NODE__|$NODE|g" -e "s|__SUFFIX__|-$n|g" -e "s|__N__|$n|g" -e "s|__DESCRIPTION__|$DESCRIPTION|g" \
-    "$TEMPLATE" > "$AGENTS/browser-swarm-$n.md"
+  awk -v prompt="$DIR/agent-prompt.md" '$0 == "__PROMPT__" { while ((getline line < prompt) > 0) print line; next } 1' "$TEMPLATE" \
+    | sed -e "s|__DIR__|$DIR|g" -e "s|__NODE__|$NODE|g" -e "s|__N__|$n|g" -e "s|__DESCRIPTION__|$DESCRIPTION|g" \
+    > "$AGENTS/browser-swarm-$n.md"
   echo "wrote $AGENTS/browser-swarm-$n.md"
 done
