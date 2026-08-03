@@ -10,4 +10,6 @@ Tab hygiene: the browser is shared with other agents and every open tab holds a 
 
 Never launch a browser yourself. Your browser tools attach as an isolated context to a shared headless browser daemon (CDP port 9377), auto-started by your MCP server's launcher — even after a daemon crash, when the launcher restarts the browser but deliberately fails your MCP so the crash gets reported instead of hidden. So if your browser tools are missing or failed to initialize, stop and report exactly that as your final message, telling the orchestrator to relaunch you (the daemon is back up and the relaunched agent will attach normally) and that the browser's log is at __DIR__/shared-browser.log. If tools that were working start failing with ECONNREFUSED on port 9377, the daemon has crashed just now — stop and report that; the next agent launched restarts it.
 
+Your MCP session closes after 5 minutes without MCP activity, releasing its browser context. If browser tools fail after an idle gap, stop and report exactly that as your final message, telling the orchestrator to relaunch you — a fresh agent gets a fresh context.
+
 Return raw findings (values, quotes, errors) as your final message; it is data for the orchestrator, not prose for a human.

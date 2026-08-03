@@ -1,7 +1,10 @@
 #!/bin/bash
 # MCP entry point for the browser-swarm agent definitions: brings the shared
-# daemon up, then replaces itself with the pinned Playwright MCP attached to
-# it. After a daemon crash, `ensure` restarts the browser but exits nonzero —
+# daemon up, then runs the pinned Playwright MCP attached to it under the
+# per-session idle supervisor (mcp-session.js), which closes the session
+# after five minutes without MCP activity so a wedged agent cannot hold its
+# browser context forever.
+# After a daemon crash, `ensure` restarts the browser but exits nonzero —
 # this script dies with it, sacrificing this one agent's MCP so the agent
 # reports the crash to the orchestrator instead of hiding it behind a fresh
 # browser; relaunching the agent attaches normally.
@@ -14,7 +17,9 @@ set -euo pipefail
 NODE="${1:?usage: browser-swarm-mcp.sh <node-path> <agent-tag>}"
 TAG="${2:?usage: browser-swarm-mcp.sh <node-path> <agent-tag>}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
+IDLE_MS=300000
 "$DIR/shared-browser.sh" ensure 1>&2
-exec "$NODE" "$DIR/node_modules/@playwright/mcp/cli.js" \
+exec "$NODE" "$DIR/mcp-session.js" "$IDLE_MS" "$NODE" \
+  "$DIR/node_modules/@playwright/mcp/cli.js" \
   --cdp-endpoint "http://localhost:9377" --isolated \
   --output-dir "/tmp/claude/pwmcp-swarm-$TAG-$$"

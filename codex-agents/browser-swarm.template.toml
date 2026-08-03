@@ -1,5 +1,5 @@
 name = "browser-swarm"
-description = "Interactive headless-browser agent for form-driven flows and sites that APIs or web search cannot handle. Spawn this custom agent type with fork_turns=\"none\". Reuse it concurrently: each invocation owns a separate MCP session and isolated context in the shared BrowserSwarm daemon."
+description = "Interactive headless-browser agent for form-driven flows and sites that APIs or web search cannot handle. Spawn this custom agent type with fork_turns=\"none\". Reuse it concurrently: each invocation owns a separate MCP session and isolated context in the shared BrowserSwarm daemon. Sessions are reaped after five idle minutes, excluding time with a request in flight; relaunch when browser access is needed again."
 model = "gpt-5.6-terra"
 model_reasoning_effort = "medium"
 sandbox_mode = "read-only"

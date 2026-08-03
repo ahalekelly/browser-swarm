@@ -1,0 +1,306 @@
+// The idle lease through the real launcher: browser-swarm-mcp.sh is copied
+// into a fixture with a stubbed shared-browser.sh and the fake MCP standing
+// in for the pinned Playwright MCP, with the lease and shutdown grace
+// shortened so five minutes becomes ~100ms.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const net = require('node:net');
+const os = require('node:os');
+const path = require('node:path');
+const readline = require('node:readline');
+const { spawn } = require('node:child_process');
+const { EventEmitter, once } = require('node:events');
+const test = require('node:test');
+
+const repo = path.resolve(__dirname, '..');
+const initializeRequest = { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} };
+
+test('the launcher drops an attached MCP session after five idle minutes', async (t) => {
+  const session = await launchSession(t);
+  await initialize(session);
+
+  const connected = once(session.connections, 'connection');
+  session.send({
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'tools/call',
+    params: { name: 'browser_navigate', arguments: {} },
+  });
+  await session.response(2);
+  const [socket] = await connected;
+
+  await closesWithin(socket, 500);
+  const [code] = await session.exitsWithin(300);
+  assert.equal(code, 75);
+  assert.match(session.stderr(), /Relaunch the browser agent/);
+});
+
+test('an initialized session is leased even when it never calls a tool', async (t) => {
+  const session = await launchSession(t, { FAKE_ATTACH_ON_INITIALIZE: '1' });
+  const connected = once(session.connections, 'connection');
+  await initialize(session);
+  const [socket] = await connected;
+
+  await closesWithin(socket, 500);
+});
+
+test('slow initialization is not mistaken for an idle session', async (t) => {
+  const session = await launchSession(t, {
+    FAKE_ATTACH_ON_INITIALIZE: '1',
+    FAKE_INITIALIZE_DELAY_MS: '250',
+  });
+  const connected = once(session.connections, 'connection');
+  session.send(initializeRequest);
+  const [socket] = await connected;
+
+  await staysOpenFor(socket, 180);
+  await session.response(1);
+  session.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  await closesWithin(socket, 500);
+});
+
+test('the lease waits for the client initialized notification', async (t) => {
+  const session = await launchSession(t, { FAKE_ATTACH_ON_INITIALIZE: '1' });
+  const connected = once(session.connections, 'connection');
+  session.send(initializeRequest);
+  await session.response(1);
+  const [socket] = await connected;
+
+  await staysOpenFor(socket, 180);
+  session.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  await closesWithin(socket, 500);
+});
+
+test('a failed initialize response never arms the lease', async (t) => {
+  const session = await launchSession(t, {
+    FAKE_ATTACH_ON_INITIALIZE: '1',
+    FAKE_INITIALIZE_ERROR: '1',
+  });
+  const connected = once(session.connections, 'connection');
+  session.send(initializeRequest);
+  const response = await session.response(1);
+  const [socket] = await connected;
+
+  assert.equal(response.error.message, 'initialize failed');
+  await staysOpenFor(socket, 180);
+});
+
+test('an in-flight tool call suspends the idle lease', async (t) => {
+  const session = await launchSession(t, { FAKE_TOOL_DELAY_MS: '250' });
+  await initialize(session);
+  const connected = once(session.connections, 'connection');
+  session.send({
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'tools/call',
+    params: { name: 'browser_navigate', arguments: {} },
+  });
+  const [socket] = await connected;
+
+  await staysOpenFor(socket, 180);
+  await session.response(2);
+  await closesWithin(socket, 500);
+});
+
+test('MCP request activity renews the session lease', async (t) => {
+  const session = await launchSession(t, { FAKE_ATTACH_ON_INITIALIZE: '1' });
+  const connected = once(session.connections, 'connection');
+  await initialize(session);
+  const [socket] = await connected;
+
+  await staysOpenFor(socket, 70);
+  session.send({ jsonrpc: '2.0', id: 2, method: 'ping', params: {} });
+  await session.response(2);
+  await staysOpenFor(socket, 70);
+  await closesWithin(socket, 300);
+});
+
+test('cancelling a tool call resumes its idle lease', async (t) => {
+  const session = await launchSession(t, { FAKE_TOOL_DELAY_MS: '1000' });
+  await initialize(session);
+  const connected = once(session.connections, 'connection');
+  session.send({
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'tools/call',
+    params: { name: 'browser_navigate', arguments: {} },
+  });
+  const [socket] = await connected;
+  session.send({
+    jsonrpc: '2.0',
+    method: 'notifications/cancelled',
+    params: { requestId: 2, reason: 'test complete' },
+  });
+
+  await closesWithin(socket, 350);
+});
+
+test('a stubborn MCP child is terminated after its shutdown grace', async (t) => {
+  const session = await launchSession(t, {
+    FAKE_ATTACH_ON_INITIALIZE: '1',
+    FAKE_IGNORE_EOF: '1',
+  });
+  const connected = once(session.connections, 'connection');
+  await initialize(session);
+  const [socket] = await connected;
+
+  await closesWithin(socket, 500);
+});
+
+test('activity in one session never extends an idle sibling lease', async (t) => {
+  const idle = await launchSession(t, { FAKE_ATTACH_ON_INITIALIZE: '1' });
+  const active = await launchSession(t, {
+    FAKE_ATTACH_ON_INITIALIZE: '1',
+    FAKE_TOOL_DELAY_MS: '250',
+  });
+  const idleConnected = once(idle.connections, 'connection');
+  const activeConnected = once(active.connections, 'connection');
+  await Promise.all([initialize(idle), initialize(active)]);
+  const [[idleSocket], [activeSocket]] = await Promise.all([idleConnected, activeConnected]);
+
+  active.send({
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'tools/call',
+    params: { name: 'browser_navigate', arguments: {} },
+  });
+  await closesWithin(idleSocket, 500);
+  assert.equal(activeSocket.destroyed, false, 'idle sibling cleanup killed an active session');
+  await active.response(2);
+  await closesWithin(activeSocket, 500);
+});
+
+test('valid non-message JSON reaches the MCP without crashing the supervisor', async (t) => {
+  const session = await launchSession(t);
+  await initialize(session);
+  const values = [null, false, 17, 'text', []];
+  for (const value of values) session.send(value);
+  session.send({ jsonrpc: '2.0', id: 2, method: 'fake/non-messages', params: {} });
+
+  const response = await Promise.race([
+    session.response(2),
+    delay(300).then(() => assert.fail('the supervisor did not forward valid non-message JSON')),
+  ]);
+
+  assert.deepEqual(response.result, values.map(JSON.stringify));
+});
+
+test('valid non-message JSON does not renew the idle lease', async (t) => {
+  const session = await launchSession(t, { FAKE_ATTACH_ON_INITIALIZE: '1' });
+  const connected = once(session.connections, 'connection');
+  await initialize(session);
+  const [socket] = await connected;
+
+  await staysOpenFor(socket, 70);
+  for (const value of [null, false, 17, 'text', []]) session.send(value);
+  await closesWithin(socket, 70);
+});
+
+async function launchSession(t, extraEnv = {}) {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-idle-'));
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+
+  copyExecutable('browser-swarm-mcp.sh', fixture);
+  copyExecutable('shared-browser.sh', fixture, '#!/bin/bash\nexit 0\n');
+  copyFile('tests/fixtures/fake-mcp.js', path.join(fixture, 'node_modules/@playwright/mcp/cli.js'));
+  copyFile('mcp-session.js', path.join(fixture, 'mcp-session.js'));
+
+  const launcher = path.join(fixture, 'browser-swarm-mcp.sh');
+  const source = fs.readFileSync(launcher, 'utf8');
+  const shortened = source.replace('IDLE_MS=300000', 'IDLE_MS=100');
+  assert.notEqual(shortened, source, 'launcher must declare the five-minute lease');
+  fs.writeFileSync(launcher, shortened);
+
+  const supervisor = path.join(fixture, 'mcp-session.js');
+  const supervisorSource = fs.readFileSync(supervisor, 'utf8');
+  fs.writeFileSync(
+    supervisor,
+    supervisorSource
+      .replace('const TERMINATE_AFTER_MS = 1000;', 'const TERMINATE_AFTER_MS = 50;')
+      .replace('const KILL_AFTER_MS = 2000;', 'const KILL_AFTER_MS = 100;'),
+  );
+
+  const connections = new EventEmitter();
+  const cdp = net.createServer((socket) => connections.emit('connection', socket));
+  await new Promise((resolve) => cdp.listen(0, '127.0.0.1', resolve));
+  t.after(() => cdp.close());
+
+  let stderr = '';
+  const child = spawn(launcher, [process.execPath, '1'], {
+    env: {
+      ...process.env,
+      FAKE_CDP_PORT: String(cdp.address().port),
+      ...extraEnv,
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  t.after(() => child.kill('SIGKILL'));
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const exited = once(child, 'close');
+
+  const responses = messageQueue(child.stdout);
+  return {
+    connections,
+    response: (id) => responses.next((message) => message.id === id),
+    send: (message) => child.stdin.write(`${JSON.stringify(message)}\n`),
+    stderr: () => stderr,
+    exitsWithin: (milliseconds) => Promise.race([
+      exited,
+      delay(milliseconds).then(() => assert.fail('idle MCP supervisor did not exit')),
+    ]),
+  };
+}
+
+async function initialize(session) {
+  session.send(initializeRequest);
+  await session.response(1);
+  session.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+}
+
+function messageQueue(stream) {
+  const queued = [];
+  const waiting = [];
+  readline.createInterface({ input: stream }).on('line', (line) => {
+    queued.push(JSON.parse(line));
+    for (const wake of waiting.splice(0)) wake();
+  });
+
+  return {
+    async next(matches) {
+      for (;;) {
+        const index = queued.findIndex(matches);
+        if (index !== -1) return queued.splice(index, 1)[0];
+        await new Promise((resolve) => waiting.push(resolve));
+      }
+    },
+  };
+}
+
+async function closesWithin(socket, milliseconds) {
+  if (socket.destroyed) return;
+  await Promise.race([
+    once(socket, 'close'),
+    delay(milliseconds).then(() => assert.fail('idle MCP retained its CDP connection')),
+  ]);
+}
+
+async function staysOpenFor(socket, milliseconds) {
+  await delay(milliseconds);
+  assert.equal(socket.destroyed, false, 'active MCP lost its CDP connection');
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function copyExecutable(source, directory, contents) {
+  const target = path.join(directory, source);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, contents ?? fs.readFileSync(path.join(repo, source)));
+  fs.chmodSync(target, 0o755);
+}
+
+function copyFile(source, target) {
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(path.join(repo, source), target);
+}
