@@ -16,6 +16,11 @@
 # the agent reports the crash to the orchestrator instead of silently papering
 # over it; the start clears the crash state, so every later agent — including
 # the sacrificed one relaunched — attaches normally.
+# The browser and watchdog are spawned into their own sessions (spawn_detached)
+# so they survive cleanup of whatever process tree ran `start`: a harness may
+# kill the deliberately-failed post-crash launcher's descendants (or a finished
+# agent's), and a browser or watchdog inside that tree would die with it —
+# turning crash recovery into a loop of sacrificed agents.
 # Auto-stop: `start` also spawns a watchdog that kills the browser after
 # 5 minutes with no attached CDP clients, so an idle daemon never outlives
 # its fan-out. An agent holds its CDP connection for exactly the lifetime of
@@ -99,11 +104,22 @@ watchdog() {
   done
 }
 
+# Run a command in its own session, output appended to $LOG. nohup is not
+# enough — it only blocks SIGHUP, while the child stays in the caller's
+# process group where a harness's tree or group cleanup can reach it.
+spawn_detached() {
+  LOG="$LOG" node -e '
+    const { spawn } = require("node:child_process");
+    const log = require("node:fs").openSync(process.env.LOG, "a");
+    spawn(process.argv[1], process.argv.slice(2), { detached: true, stdio: ["ignore", log, log] }).unref();
+  ' "$@"
+}
+
 # One watchdog per browser pid; the pid in the command line both prevents
 # duplicates and lets `status` find it.
 spawn_watchdog() {
   if ! pgrep -f "shared-browser.sh watchdog $1" > /dev/null 2>&1; then
-    nohup "$DIR/shared-browser.sh" watchdog "$1" >> "$LOG" 2>&1 &
+    spawn_detached "$DIR/shared-browser.sh" watchdog "$1"
   fi
 }
 
@@ -127,14 +143,14 @@ start() {
   mkdir -p "$PROFILE"
   # taskpolicy -c utility: every Chromium child inherits the QoS clamp, so
   # headless work never competes with the user's foreground apps.
-  nohup taskpolicy -c utility "$BIN" \
+  spawn_detached taskpolicy -c utility "$BIN" \
     --headless \
     "--fingerprint=$FINGERPRINT" \
     --fingerprint-platform=macos \
     --fingerprint-brand=Chrome \
     "--remote-debugging-port=$PORT" \
     "--user-data-dir=$PROFILE" \
-    --no-first-run >> "$LOG" 2>&1 &
+    --no-first-run
   for _ in $(seq 1 20); do
     if alive; then
       # The owner may be a concurrent `start`'s browser rather than our child
