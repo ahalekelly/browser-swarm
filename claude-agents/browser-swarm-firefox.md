@@ -3,7 +3,7 @@ name: browser-swarm-firefox
 description: Headless-Firefox swarm agent for sites where Chromium is blocked but Firefox renders (Akamai, notably). Launches its own browser rather than attaching to the shared daemon, since CDP is Chromium-only — so it costs a full browser process per invocation. Use the plain browser-swarm types unless a site is confirmed to block them.
 model: sonnet
 mcpServers:
-  - playwright:
+  - firefox:
       type: stdio
       command: /path/to/browser-swarm/firefox-mcp.sh
       args: ["/opt/homebrew/bin/node", "1"]

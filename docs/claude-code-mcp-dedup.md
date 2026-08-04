@@ -1,27 +1,32 @@
-# Claude Code deduplicates inline MCP servers across concurrent subagents
+# Claude Code shares inline MCP servers by name across concurrent subagents
 
-Concurrent Claude Code subagents whose frontmatter declares a **byte-identical** MCP server config share one stdio server process and one MCP session. For a Playwright MCP server that means one browser context and one contested tab list: every subagent's `browser_navigate` retargets the same tab, clobbering the others.
+Concurrent Claude Code subagents whose frontmatter declares an inline MCP server under the **same name** share one MCP client session. For a Playwright MCP server that means one browser context and one contested tab list: every subagent's `browser_navigate` retargets the same tab, clobbering the others.
 
-Verified on Claude Code 2.1.220 with `@playwright/mcp` 0.0.78.
+The server name is the key. Differing `command` arguments do not separate two subagents, and neither does differing agent type — a `browser-swarm-5` agent whose server is named `playwright` is served by the `playwright` session another agent already owns, launcher tag and all. Whichever session is registered under the name wins, so a long-running agent's calls can also migrate between server processes as later agents start.
 
-## Why it happens
-
-The dedup is keyed on config *content*, not agent type — four different agent types with byte-identical Playwright configs still share one server. This contradicts the documented behavior, which says inline servers are "connected when the subagent starts and disconnected when it finishes."
-
-`@playwright/mcp` with `--isolated` creates one browser context per *MCP client session*, and a stdio server has exactly one client session. When N subagents are multiplexed over that single session, they all operate on the same context. `--isolated` cannot help here — the isolation boundary it keys on is the thing that got collapsed. Cross-process browser sharing is impossible in this mode, since an isolated MCP server launches a fresh browser per server process, which pins the sharing on Claude Code's connection layer rather than on Playwright.
-
-Related upstream reports: [playwright-mcp#893](https://github.com/microsoft/playwright-mcp/issues/893) describes exactly this symptom, parallel Claude Code agents "fighting over the same tab despite `--isolated`", with no root cause identified. [claude-code#28126](https://github.com/anthropics/claude-code/issues/28126) reports the opposite — per-subagent duplicate servers — on Windows.
+Verified on Claude Code 2.1.221 with `@playwright/mcp` 0.0.78.
 
 ## The workaround
 
-Make each concurrent subagent's server config unique. The sibling agent definitions in [`claude-agents/`](../claude-agents/) are identical except for `name:` and a per-type agent-tag argument to the MCP launcher (which also names the session's `--output-dir`), which is enough to defeat the dedup (and also moves the MCP's artifact droppings out of the working directory).
+Give every definition that may run concurrently its own server name. The sibling agents in [`claude-agents/`](../claude-agents/) declare `playwright1` … `playwright5` and pass a matching per-type tag to the MCP launcher (which also names the session's `--output-dir`, keeping the MCP's artifact droppings out of the working directory). The Firefox variant declares `firefox`.
 
-Verified at 5× concurrency: five subagents on five distinct sites, each listing its full tab set three times at 15s intervals, gave 15/15 clean listings — no agent ever saw another's tab — against five separate server processes.
+Two probes settle it, each a parent subagent that navigates to a marker page, spawns a child subagent that navigates to a different marker, then lists its own tabs:
+
+- Both servers named `playwright`, distinct launcher tags: the child's calls are served by the *parent's* server process, and the parent's tab list comes back showing the child's page.
+- Servers named `pwparentb` and `pwchildb`: each agent gets its own server process, its own browser context, and a tab list holding only its own page.
 
 Two things this costs:
 
-- **Concurrency is capped at the number of sibling types.** Two concurrent invocations of the *same* type still share a browser, so the orchestrator must assign types round-robin. More siblings can be added mechanically.
-- **Type assignment needs a single allocator.** The dedup is process-wide, spanning every subagent in the session regardless of who spawned it, and subagents cannot see which types their siblings picked. Nested orchestrator subagents that allocate independently collide: in one observed session, the parent and three concurrent orchestrator subagents each started at `browser-swarm-1`, and every duplicated type produced bidirectional tab contamination — each agent read the other's pages, misdiagnosed downstream as ad injection and as a daemon isolation bug. A parent that fans browser work out through multiple subagents must write an explicit disjoint type range into each one's prompt.
-- **The files must stay in sync, and their configs must stay different.** Normalizing the per-type arguments to match silently reintroduces the shared browser.
+- **Concurrency is capped at the number of sibling types.** Two concurrent invocations of the *same* type share one name, so the orchestrator assigns types round-robin — counting every swarm agent alive in the Claude Code session, since nested fan-outs (several orchestrators each spawning leaves) oversubscribe the pool silently. More siblings can be added mechanically by raising `SWARM_SIZE`.
+- **Type assignment needs a single allocator.** Subagents cannot see which types their siblings picked, so nested orchestrators that allocate independently collide deterministically: in one observed session, the parent and three concurrent orchestrator subagents each started at `browser-swarm-1`, and every duplicated type produced bidirectional tab contamination — each agent read the other's pages, misdiagnosed downstream as ad injection and as a daemon isolation bug. A parent that fans browser work out through multiple subagents must write an explicit disjoint type range into each one's prompt.
+- **The files must stay in sync, and their server names must stay different.** Normalizing the names back to one silently reintroduces the shared browser.
 
-If Claude Code later makes per-instance connections match the documentation, the unique configs stay harmless.
+## Recognising a shared session
+
+The daemon isolates correctly — one MCP client session gets one Chromium browser context, and pages other CDP clients open are invisible to it — so cross-agent tab traffic always means two agents landed on one MCP session, never a leak between contexts.
+
+Every snapshot and console link in a tool result is a path into the serving process's output dir, `/tmp/claude/pwmcp-swarm-<tag>-<pid>`. An agent whose results cite a tag that is not its own is being served by another agent's session; the same paths in a saved transcript reconstruct after the fact which agents shared which server process.
+
+Related upstream reports: [playwright-mcp#893](https://github.com/microsoft/playwright-mcp/issues/893) describes the symptom, parallel Claude Code agents "fighting over the same tab despite `--isolated`", with no root cause identified. [claude-code#28126](https://github.com/anthropics/claude-code/issues/28126) reports the opposite — per-subagent duplicate servers — on Windows.
+
+If Claude Code later gives each subagent its own connection, the distinct names stay harmless.
