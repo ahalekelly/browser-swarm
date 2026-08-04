@@ -21,6 +21,7 @@ Verified at 5× concurrency: five subagents on five distinct sites, each listing
 Two things this costs:
 
 - **Concurrency is capped at the number of sibling types.** Two concurrent invocations of the *same* type still share a browser, so the orchestrator must assign types round-robin. More siblings can be added mechanically.
+- **Type assignment needs a single allocator.** The dedup is process-wide, spanning every subagent in the session regardless of who spawned it, and subagents cannot see which types their siblings picked. Nested orchestrator subagents that allocate independently collide: in one observed session, the parent and three concurrent orchestrator subagents each started at `browser-swarm-1`, and every duplicated type produced bidirectional tab contamination — each agent read the other's pages, misdiagnosed downstream as ad injection and as a daemon isolation bug. A parent that fans browser work out through multiple subagents must write an explicit disjoint type range into each one's prompt.
 - **The files must stay in sync, and their configs must stay different.** Normalizing the per-type arguments to match silently reintroduces the shared browser.
 
 If Claude Code later makes per-instance connections match the documentation, the unique configs stay harmless.

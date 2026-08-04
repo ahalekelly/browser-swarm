@@ -71,6 +71,8 @@ The system prompt in those files is spliced in from [agent-prompt.md](agent-prom
 
 **Relaunch an agent after an idle disconnect.** An initialized MCP session closes after five minutes without MCP activity. Browser agents are disposable: if browser tools are needed after that gap, the orchestrator launches a fresh agent with a fresh isolated context.
 
+**One concurrent invocation per numbered type, allocated by a single coordinator.** Concurrent same-type invocations share one MCP session and one browser context — their tabs clobber each other (see [docs/claude-code-mcp-dedup.md](docs/claude-code-mcp-dedup.md)). Subagents cannot see which types their siblings picked, so a parent that spreads browser work across multiple orchestrator subagents must assign each a disjoint slice of the numbers in its prompt.
+
 ## How it works
 
 **Port 9377, not CDP's default 9222.** The daemon never contends with a legitimate 9222 user (IDE debuggers, a Chrome launched with `--remote-debugging-port`), and an agent spawning while the daemon is down finds the port closed instead of silently attaching to whatever debug browser happens to be listening — the attaching MCP client does no ownership check. Accepted risk: the CDP port is unauthenticated, so any local process can drive the shared browser. Fine on a single-user machine.
