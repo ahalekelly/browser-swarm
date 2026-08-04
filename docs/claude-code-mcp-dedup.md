@@ -1,8 +1,8 @@
 # Claude Code shares inline MCP servers by name across concurrent subagents
 
-Concurrent Claude Code subagents whose frontmatter declares an inline MCP server under the **same name** share one MCP client session. For a Playwright MCP server that means one browser context and one contested tab list: every subagent's `browser_navigate` retargets the same tab, clobbering the others.
+Concurrent Claude Code subagents whose frontmatter declares an inline MCP server under the **same name** can end up served by one MCP client session. For a Playwright MCP server that means one browser context and one contested tab list: every subagent's `browser_navigate` retargets the same tab, clobbering the others.
 
-The server name is the key. Differing `command` arguments do not separate two subagents, and neither does differing agent type — a `browser-swarm-5` agent whose server is named `playwright` is served by the `playwright` session another agent already owns, launcher tag and all. Whichever session is registered under the name wins, so a long-running agent's calls can also migrate between server processes as later agents start.
+The server name is the key, and a shared name gives no isolation guarantee — though not every same-named pair shares. What the probes and incident forensics pin down: byte-identical configs share one session; a subagent spawned by an agent that already holds a same-named session joins that session whatever its own config says, so in a nested fan-out a `browser-swarm-1` leaf lands on its parent's `playwright` session, launcher tag and all; and a running agent's calls can migrate between same-named server processes as agents around it start and finish. A flat fan-out of same-named siblings with distinct launcher arguments can come up isolated — which is why the argument-only workaround looked sufficient until nested spawns collapsed it.
 
 Verified on Claude Code 2.1.221 with `@playwright/mcp` 0.0.78.
 
