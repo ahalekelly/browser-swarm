@@ -6,10 +6,15 @@
 # hijack each other's tabs).
 # Port 9377, deliberately not 9222: 9222 is the universal CDP default, and an
 # agent must never attach to some other tool's debug browser (or vice versa).
-# `start` is idempotent: safe to fire blind before any fan-out. Ownership is
-# derived from the port itself — the listener whose command line names our
-# profile dir is ours; there is no pidfile to go stale. A foreign process on
-# the port is always fatal, and `stop` refuses to kill it.
+# `start` is idempotent: safe to fire blind before any fan-out, from any
+# shell. Ownership is derived from the port itself — the listener holding
+# open files inside our profile dir is ours; there is no pidfile to go stale.
+# Open files (lsof) rather than the command line (ps): agent sandboxes block
+# process inspection but not lsof's file tables, so ownership stays decidable
+# from a sandboxed shell. A foreign process on the port is always fatal, and
+# `stop` refuses to kill it. Verbs that must write beside the script — a cold
+# `start`, `stop` — fail fast with a pointer to an unsandboxed shell when the
+# sandbox denies those writes.
 # Crash-aware auto-start: agents launch through browser-swarm-mcp.sh, whose
 # `ensure` verb starts the daemon whenever it is down. After a crash it still
 # starts the browser but exits nonzero, sacrificing that one agent's MCP so
@@ -48,17 +53,26 @@ IDLE_POLLS=10 # consecutive idle polls before auto-stop (10 × 30s = 5 min)
 
 alive() { curl -s --max-time 2 "http://localhost:$PORT/json/version" > /dev/null; }
 
-# Pid of the listener on $PORT that this script started (its command line names
-# our profile dir). Empty when the port is free or held by a foreign process.
+# Pid of the listener on $PORT that this script started (it holds files inside
+# our profile dir open, as any Chromium does with its profile). Empty when the
+# port is free or held by a foreign process.
 owner_pid() {
   local pid
   for pid in $(lsof -t -i ":$PORT" -sTCP:LISTEN 2> /dev/null | sort -u || true); do
-    if ps -o command= -p "$pid" 2> /dev/null | grep -qF -- "--user-data-dir=$PROFILE"; then
+    # grep reads lsof's full output (no -q): -q exits at the first match, lsof
+    # dies on SIGPIPE, and pipefail would turn the successful match into a
+    # failure — a real Chromium lists hundreds of open files.
+    if lsof -p "$pid" 2> /dev/null | grep -F -- "$PROFILE/" > /dev/null; then
       echo "$pid"
       return
     fi
   done
 }
+
+# True when this shell may write beside the script, where the daemon's state
+# marker, log, and profile all live. Agent sandboxes typically deny these
+# writes while allowing everything the read verbs need.
+can_write() { (: >> "$STATE_FILE") 2> /dev/null; }
 
 # Number of distinct processes holding an established connection to the CDP
 # port, excluding the browser ($1) itself. 0 means no agent is attached.
@@ -126,13 +140,23 @@ spawn_watchdog() {
 start() {
   if alive; then
     OWNER="$(owner_pid)"
-    [ -n "$OWNER" ] && { mark_running; spawn_watchdog "$OWNER"; echo "shared browser already up: pid $OWNER, CDP http://localhost:$PORT"; exit 0; }
+    if [ -n "$OWNER" ]; then
+      # A sandboxed shell cannot refresh the state marker or spawn a watchdog,
+      # but the unsandboxed start that brought the daemon up already did both.
+      if can_write; then mark_running; spawn_watchdog "$OWNER"; fi
+      echo "shared browser already up: pid $OWNER, CDP http://localhost:$PORT"
+      exit 0
+    fi
     echo "ERROR: a foreign CDP browser is serving port $PORT — refusing to share it (see: lsof -i :$PORT)" >&2
     exit 1
   fi
   if lsof -i ":$PORT" -sTCP:LISTEN > /dev/null 2>&1; then
     echo "ERROR: port $PORT is taken by a non-CDP process:" >&2
     lsof -i ":$PORT" -sTCP:LISTEN >&2
+    exit 1
+  fi
+  if ! can_write; then
+    echo "ERROR: this shell cannot write to $DIR (sandboxed?) — start the daemon from an unsandboxed shell, or let an agent's MCP launcher start it" >&2
     exit 1
   fi
   crashed && echo "warning: previous shared browser instance shut down uncleanly (crashed or killed) — see $LOG" >&2
@@ -175,9 +199,13 @@ stop() {
       echo "ERROR: the CDP browser on port $PORT is not ours — refusing to kill it (see: lsof -i :$PORT)" >&2
       exit 1
     fi
-    crashed && { echo "note: previous instance shut down uncleanly — clearing crash state"; mark_clean; }
+    crashed && can_write && { echo "note: previous instance shut down uncleanly — clearing crash state"; mark_clean; }
     echo "shared browser already stopped"
     exit 0
+  fi
+  if ! can_write; then
+    echo "ERROR: this shell cannot write to $DIR (sandboxed?) — run \`$0 stop\` from an unsandboxed shell" >&2
+    exit 1
   fi
   mark_clean
   kill "$OWNER"
@@ -204,9 +232,11 @@ status() {
   echo "pid: $OWNER"
   # head -1: the watchdog's own command substitutions fork subshells that
   # briefly match the same pattern.
-  WD="$(pgrep -f "shared-browser.sh watchdog $OWNER" | head -1 || true)"
+  WD="$(pgrep -f "shared-browser.sh watchdog $OWNER" 2> /dev/null | head -1 || true)"
   if [ -n "$WD" ]; then
     echo "watchdog: pid $WD (auto-stop after $((IDLE_POLL * IDLE_POLLS))s with no attached clients)"
+  elif ! ps -p "$$" > /dev/null 2>&1; then
+    echo "watchdog: unknown — this sandboxed shell cannot list processes"
   else
     echo "watchdog: not running — browser will not auto-stop"
   fi
