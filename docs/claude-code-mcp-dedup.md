@@ -8,7 +8,7 @@ Verified on Claude Code 2.1.221 with `@playwright/mcp` 0.0.78.
 
 ## The workaround
 
-Give every definition that may run concurrently its own server name. The sibling agents in [`claude-agents/`](../claude-agents/) declare `playwright1` … `playwright5` and pass a matching per-type tag to the MCP launcher (which also names the session's `--output-dir`, keeping the MCP's artifact droppings out of the working directory). The Firefox variant declares `firefox`.
+Give every definition that may run concurrently its own server name. The sibling agents in [`claude-agents/`](../claude-agents/) declare `playwright1` … `playwright10` and pass a matching per-type tag to the MCP launcher (which also names the session's `--output-dir`, keeping the MCP's artifact droppings out of the working directory). The Firefox variant declares `firefox`.
 
 Two probes settle it, each a parent subagent that navigates to a marker page, spawns a child subagent that navigates to a different marker, then lists its own tabs:
 
