@@ -25,7 +25,9 @@ Two things this costs:
 
 The daemon isolates correctly — one MCP client session gets one Chromium browser context, and pages other CDP clients open are invisible to it — so cross-agent tab traffic always means two agents landed on one MCP session, never a leak between contexts.
 
-Every snapshot and console link in a tool result is a path into the serving process's output dir, `/tmp/claude/pwmcp-swarm-<tag>-<pid>`. An agent whose results cite a tag that is not its own is being served by another agent's session; the same paths in a saved transcript reconstruct after the fact which agents shared which server process.
+Every snapshot and console link in a tool result is a path into the serving process's output dir, `/tmp/claude/pwmcp-swarm-<tag>-<pid>`. An agent whose results cite a tag that is not its own is being served by another agent's session; a pid that changes between one agent's own results is the migration signature (its calls moved to a different same-named process); and the same paths in a saved transcript reconstruct after the fact which agents shared which server process.
+
+Treat agents' own attributions of *which* sibling collided with them as guesses: a victim cannot see the session's roster, so it blames whichever type it knows was spawned. In every forensic reconstruction to date, hijacks reported as cross-type (and once as cross-session) resolved to two same-type agents on one server process — e.g. a `browser-swarm-3` whose "foreign" Google search was navigated, per the transcripts' `mcp__playwright3__` calls, by a second concurrent `browser-swarm-3` spawned by a different orchestrator subagent. Cross-session sharing of a stdio server is not possible at all: each Claude Code process spawns its own children.
 
 Related upstream reports: [playwright-mcp#893](https://github.com/microsoft/playwright-mcp/issues/893) describes the symptom, parallel Claude Code agents "fighting over the same tab despite `--isolated`", with no root cause identified. [claude-code#28126](https://github.com/anthropics/claude-code/issues/28126) reports the opposite — per-subagent duplicate servers — on Windows.
 
