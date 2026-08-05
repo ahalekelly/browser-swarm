@@ -1,17 +1,25 @@
 #!/usr/bin/env node
 // Stand-in for fingerprint-chromium in daemon tests: answers CDP's
-// /json/version on the given port and keeps running until killed. Its
-// command line carries the passed flags, which is what the daemon's
-// port-derived ownership check greps for.
+// /json/version on the given port and keeps running until killed. It holds a
+// file inside the passed profile dir open for its whole lifetime — real
+// Chromium always does — which is what the daemon's port-derived ownership
+// check looks for.
+const fs = require('node:fs');
 const http = require('node:http');
+const path = require('node:path');
 
-const portArgument = process.argv.find((argument) =>
-  argument.startsWith('--remote-debugging-port='),
-);
+const flag = (name) => {
+  const argument = process.argv.find((candidate) => candidate.startsWith(`--${name}=`));
+  if (!argument) throw new Error(`missing --${name}`);
+  return argument.slice(argument.indexOf('=') + 1);
+};
 
-if (!portArgument) throw new Error('missing --remote-debugging-port');
+const port = Number(flag('remote-debugging-port'));
+const profile = flag('user-data-dir');
 
-const port = Number(portArgument.slice(portArgument.indexOf('=') + 1));
+fs.mkdirSync(profile, { recursive: true });
+fs.openSync(path.join(profile, 'FakeBrowserLock'), 'w'); // held open until exit
+
 http.createServer((request, response) => {
   response.setHeader('content-type', 'application/json');
   if (request.url === '/json/version') {
