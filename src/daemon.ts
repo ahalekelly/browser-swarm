@@ -1,6 +1,6 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -148,6 +148,9 @@ async function spawnBackend(backend: Backend): Promise<void> {
       throw new DaemonError(`Playwright Firefox is not installed (run ${join(ROOT, 'install-playwright-firefox.sh')})`);
     }
     writeFileSync(backend.ownershipMarker, 'BrowserSwarm Firefox daemon ownership marker\n');
+    // A stale endpoint file would satisfy ready() as soon as the new server
+    // binds the port, handing clients the previous server's endpoint.
+    rmSync(backend.endpointFile, { force: true });
     spawnDetached(backend.log, process.execPath, [DAEMON_PATH, 'serve', 'firefox', backend.ownershipMarker]);
     return;
   }
@@ -193,7 +196,7 @@ async function serveFirefox(backend: Backend, marker: string): Promise<void> {
 async function stop(backend: Backend, reporter: Reporter): Promise<void> {
   const owner = ownerPid(backend);
   if (owner === undefined) {
-    if (await ready(backend) || (backend.key === 'firefox-ws' && hasListener(backend.port))) {
+    if (await ready(backend) || hasListener(backend.port)) {
       throw new DaemonError(`the ${backend.protocolName} on port ${backend.port} is not ours — refusing to kill it (see: lsof -i :${backend.port})`);
     }
     if (crashed(backend)) {
@@ -420,7 +423,10 @@ async function main(): Promise<void> {
   }
 }
 
-if (import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+// Node realpaths the entry module for import.meta.url, so argv must be
+// realpathed too — macOS /var and /tmp are symlinks, and a plain resolve()
+// comparison would make a symlinked invocation silently exit without running.
+if (import.meta.url === pathToFileURL(realpathSync(resolve(process.argv[1]))).href) {
   main().catch((error) => {
     if (error instanceof DaemonError) {
       console.error(`ERROR: ${error.message}`);
