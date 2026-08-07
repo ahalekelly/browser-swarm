@@ -10,7 +10,7 @@ Findings were measured on live commercial sites in July 2026. Detection vendors 
 |---|---|---|
 | None / light | The shared fingerprint-chromium daemon | — |
 | Cloudflare | Usually just CDN, not a challenge. Try the daemon first, escalate only on a real interstitial | untested in depth |
-| **Akamai** | The daemon, or launched-mode headless Firefox | live-confirmed, both |
+| **Akamai** | Shared fingerprint-Chromium or shared headless Firefox | live-confirmed, both |
 | **DataDome**, alone or stacked | No headless engine renders. Skip the browser | live-confirmed negative |
 | **PerimeterX** | Behaves like DataDome; headless Firefox is blocked | one live data point |
 
@@ -45,7 +45,7 @@ One engine family this rules out entirely: **CDP-minimal drivers — zendriver, 
 
 ## What the MCP can drive
 
-- **CDP is Chromium-only.** Firefox can't be driven over CDP, so a Firefox agent must launch its own browser instead of attaching to the daemon. Functionally fine, but it costs a browser process per agent, so the 2-tab rule matters more, not less.
+- **CDP is Chromium-only.** Firefox agents connect to the shared `firefox.launchServer()` daemon through Playwright's WebSocket protocol instead. Each MCP client still gets an isolated context on one browser process.
 - **`--browser` accepts only `chrome`, `firefox`, `webkit`, `msedge`,** but **`--config` exposes the full Playwright `launchOptions`** — `executablePath`, `args`, `ignoreDefaultArgs`, `env`, plus `contextOptions`. Any engine whose configuration is a patched binary plus launch flags is therefore reachable from the MCP alone, with no second driver process.
 - **`--endpoint <ws url>`** connects to an existing Playwright server (`browserType.connect()`), not a CDP endpoint. Unlike `--cdp-endpoint` this is browser-agnostic, so it's the hook for any engine that can expose a Playwright server.
 - **`--init-script <path>`** adds JavaScript evaluated in every page before the page's own scripts; **`--init-page <path>`** evaluates TypeScript against the Playwright page object, which is the escape hatch for anything the page context can't do, such as `setExtraHTTPHeaders`.

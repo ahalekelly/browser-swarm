@@ -1,34 +1,24 @@
 # Claude Code shares inline MCP servers by name across concurrent subagents
 
-Concurrent Claude Code subagents whose frontmatter declares an inline MCP server under the **same name** can end up served by one MCP client session. For a Playwright MCP server that means one browser context and one contested tab list: every subagent's `browser_navigate` retargets the same tab, clobbering the others.
+Stock Claude Code can route concurrent subagents whose frontmatter declares the same inline MCP server name through one MCP client session. For Playwright MCP, those agents share one browser context and contest one tab list despite `--isolated`.
 
-The server name is the key, and a shared name gives no isolation guarantee — though not every same-named pair shares. What the probes and incident forensics pin down: byte-identical configs share one session; a subagent spawned by an agent that already holds a same-named session joins that session whatever its own config says, so in a nested fan-out a `browser-swarm-1` leaf lands on its parent's `playwright` session, launcher tag and all; and a running agent's calls can migrate between same-named server processes as agents around it start and finish. A flat fan-out of same-named siblings with distinct launcher arguments can come up isolated — which is why the argument-only workaround looked sufficient until nested spawns collapsed it.
+The server name is the key. Byte-identical configs share one session; nested subagents can join a parent's same-named session even when launcher arguments differ; and calls can migrate between same-named server processes as surrounding agents start and finish. These behaviors were verified on Claude Code 2.1.221 with `@playwright/mcp` 0.0.78 and are tracked upstream in [claude-code#84638](https://github.com/anthropics/claude-code/issues/84638).
 
-Verified on Claude Code 2.1.221 with `@playwright/mcp` 0.0.78.
+## Local fix
 
-## The workaround
+The [`mcp-per-subagent`](https://github.com/ahalekelly/claude-patching) patch gives every subagent its own stdio MCP server process and stamps `CLAUDE_MCP_PER_AGENT=1` into that server's environment. BrowserSwarm therefore ships one reusable `browser-swarm` definition with server name `playwright`; every invocation gets a distinct MCP process, output directory, and isolated browser context.
 
-Give every definition that may run concurrently its own server name. The sibling agents in [`claude-agents/`](../claude-agents/) declare `playwright1` … `playwright10` and pass a matching per-type tag to the MCP launcher (which also names the session's `--output-dir`, keeping the MCP's artifact droppings out of the working directory). The Firefox variant declares `firefox`.
+`src/launch.ts` enforces the patch as a canary. When `CLAUDECODE=1` without `CLAUDE_MCP_PER_AGENT=1`, it exits before touching either browser daemon and explains how to install the patch. Stock Claude Code gets a loud refusal rather than silent context sharing. Codex does not set `CLAUDECODE`, so the check does not apply there.
 
-Two probes settle it, each a parent subagent that navigates to a marker page, spawns a child subagent that navigates to a different marker, then lists its own tabs:
+When upstream fixes #84638, only this canary needs removal. The single reusable agent and per-invocation isolated contexts remain the intended design.
 
-- Both servers named `playwright`, distinct launcher tags: the child's calls are served by the *parent's* server process, and the parent's tab list comes back showing the child's page.
-- Servers named `pwparentb` and `pwchildb`: each agent gets its own server process, its own browser context, and a tab list holding only its own page.
+## Evidence
 
-Two things this costs:
+Two nested probes established the failure mode. A parent navigated to one marker, spawned a child that navigated to another, then listed its tabs:
 
-- **Concurrency is capped at the number of sibling types.** Two concurrent invocations of the *same* type share one name, so the orchestrator assigns types round-robin — counting every swarm agent alive in the Claude Code session, since nested fan-outs (several orchestrators each spawning leaves) oversubscribe the pool silently. More siblings can be added mechanically by raising `SWARM_SIZE`.
-- **Type assignment needs a single allocator.** Subagents cannot see which types their siblings picked, so nested orchestrators that allocate independently collide deterministically: in one observed session, the parent and three concurrent orchestrator subagents each started at `browser-swarm-1`, and every duplicated type produced bidirectional tab contamination — each agent read the other's pages, misdiagnosed downstream as ad injection and as a daemon isolation bug. A parent that fans browser work out through multiple subagents must write an explicit disjoint type range into each one's prompt.
-- **The files must stay in sync, and their server names must stay different.** Normalizing the names back to one silently reintroduces the shared browser.
+- With both inline servers named `playwright`, the child's calls ran through the parent's server process and replaced the parent's page.
+- With distinct server names, each agent retained its own process, context, and marker page.
 
-## Recognising a shared session
+Daemon isolation was not the source. One MCP connection gets one isolated context, and pages opened by other connections are invisible. Tabs an agent did not open therefore indicate broken MCP process isolation; the agent prompt treats that as a bug and tells the worker to stop.
 
-The daemon isolates correctly — one MCP client session gets one Chromium browser context, and pages other CDP clients open are invisible to it — so cross-agent tab traffic always means two agents landed on one MCP session, never a leak between contexts.
-
-Every snapshot and console link in a tool result is a path into the serving process's output dir, `/tmp/claude/pwmcp-swarm-<tag>-<pid>`. An agent whose results cite a tag that is not its own is being served by another agent's session; a pid that changes between one agent's own results is the migration signature (its calls moved to a different same-named process); and the same paths in a saved transcript reconstruct after the fact which agents shared which server process.
-
-Treat agents' own attributions of *which* sibling collided with them as guesses: a victim cannot see the session's roster, so it blames whichever type it knows was spawned. In every forensic reconstruction to date, hijacks reported as cross-type (and once as cross-session) resolved to two same-type agents on one server process — e.g. a `browser-swarm-3` whose "foreign" Google search was navigated, per the transcripts' `mcp__playwright3__` calls, by a second concurrent `browser-swarm-3` spawned by a different orchestrator subagent. Cross-session sharing of a stdio server is not possible at all: each Claude Code process spawns its own children.
-
-Related upstream reports: [playwright-mcp#893](https://github.com/microsoft/playwright-mcp/issues/893) describes the symptom, parallel Claude Code agents "fighting over the same tab despite `--isolated`", with no root cause identified. [claude-code#28126](https://github.com/anthropics/claude-code/issues/28126) reports the opposite — per-subagent duplicate servers — on Windows.
-
-If Claude Code later gives each subagent its own connection, the distinct names stay harmless.
+Related report: [playwright-mcp#893](https://github.com/microsoft/playwright-mcp/issues/893) describes parallel agents fighting over one tab despite `--isolated`.

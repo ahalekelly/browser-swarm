@@ -4,12 +4,10 @@
 ./install-agents.sh
 ```
 
-Generates `browser-swarm-1` … `browser-swarm-10` into `~/.claude/agents/` from `browser-swarm.template.md`, with this checkout's path and your `node` substituted in and the shared system prompt ([../agent-prompt.md](../agent-prompt.md)) spliced in. Run it again after moving the checkout.
+Generates `browser-swarm` and `browser-swarm-firefox` in `~/.claude/agents/`, with this checkout's path and active Node.js path substituted into the templates. Both splice in the shared system prompt from [agent-prompt.md](../agent-prompt.md). Run the installer again after moving the checkout.
 
-The ten siblings are identical except for their name, their MCP server name (`playwright1` … `playwright10`), and the agent-tag argument to the launcher. The server name is load-bearing: Claude Code shares one MCP session between concurrent subagents whose inline servers carry the same name, which collapses them into one browser context fighting over one tab. See [../docs/claude-code-mcp-dedup.md](../docs/claude-code-mcp-dedup.md).
+The installer removes stale numbered `browser-swarm-1` … `browser-swarm-10` files. The local Claude Code [`mcp-per-subagent`](https://github.com/ahalekelly/claude-patching) patch makes one reusable definition safe for concurrent subagents; the launcher refuses unpatched sessions. See [Claude Code inline MCP server sharing](../docs/claude-code-mcp-dedup.md).
 
-**One concurrent invocation per type.** Assign types round-robin across a fan-out, counting every swarm agent alive in the Claude Code session rather than only one orchestrator's leaves; two agents on the same type still share a browser. Raise `SWARM_SIZE` in the script for a wider fan-out.
+Use `browser-swarm-firefox` only for sites confirmed to block Chromium. It gets an isolated context on one shared Playwright Firefox process.
 
-An initialized agent's MCP session closes after five minutes without activity. Relaunch the agent when browser tools are needed again; the fresh session gets a fresh isolated context.
-
-The installer also generates `browser-swarm-firefox` from `browser-swarm-firefox.template.md` for sites that block Chromium ([../docs/bot-detection.md](../docs/bot-detection.md)). Each invocation gets an isolated context on one shared Playwright Firefox process.
+Keep fan-outs to about 10 concurrent agents. Each context uses roughly 100–200 MB with the 2-tab cap. Sessions close after five idle minutes; relaunch when browser work resumes.

@@ -42,6 +42,39 @@ for (const browser of browsers) {
   });
 }
 
+test('Claude canary refuses an unpatched session before touching the daemon', (t) => {
+  const fixture = createFixture(t);
+  const argumentLog = path.join(fixture, 'args');
+  const daemonTouch = path.join(fixture, 'daemon-touch');
+  const result = runLaunch(fixture, 'chromium', argumentLog, {
+    CLAUDECODE: '1',
+    CLAUDE_MCP_PER_AGENT: '',
+    DAEMON_TOUCH_LOG: daemonTouch,
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /requires patched Claude Code/);
+  assert.match(result.stderr, /claude-patching/);
+  assert.match(result.stderr, /84638/);
+  assert.equal(fs.existsSync(daemonTouch), false, 'canary touched the daemon');
+  assert.equal(fs.existsSync(argumentLog), false, 'canary launched the MCP');
+});
+
+test('Claude canary accepts the per-agent stamp', (t) => {
+  const fixture = createFixture(t);
+  const argumentLog = path.join(fixture, 'args');
+  const daemonTouch = path.join(fixture, 'daemon-touch');
+  const result = runLaunch(fixture, 'chromium', argumentLog, {
+    CLAUDECODE: '1',
+    CLAUDE_MCP_PER_AGENT: '1',
+    DAEMON_TOUCH_LOG: daemonTouch,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(daemonTouch), true);
+  assert.equal(fs.existsSync(argumentLog), true);
+});
+
 function createFixture(t) {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-launcher-'));
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
@@ -49,8 +82,11 @@ function createFixture(t) {
   fs.mkdirSync(sourceDir, { recursive: true });
   fs.copyFileSync(path.join(repo, 'src/launch.ts'), path.join(sourceDir, 'launch.ts'));
   fs.writeFileSync(path.join(sourceDir, 'daemon.ts'), `
+import { writeFileSync } from 'node:fs';
 export class DaemonError extends Error { exitCode = 1; }
-export async function ensure() {}
+export async function ensure() {
+  if (process.env.DAEMON_TOUCH_LOG) writeFileSync(process.env.DAEMON_TOUCH_LOG, 'touched');
+}
 export async function firefoxEndpoint() { return 'ws://[::1]:9378/browser-swarm'; }
 `);
   fs.writeFileSync(path.join(sourceDir, 'mcp-session.ts'), `
@@ -63,10 +99,14 @@ writeFileSync(process.env.ARG_LOG, JSON.stringify(process.argv.slice(2)));
 }
 
 function launch(fixture, browser, argumentLog) {
-  const result = spawnSync(process.execPath, [path.join(fixture, 'src/launch.ts'), browser], {
-    encoding: 'utf8',
-    env: { ...process.env, ARG_LOG: argumentLog },
-  });
+  const result = runLaunch(fixture, browser, argumentLog, { CLAUDECODE: '' });
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(fs.readFileSync(argumentLog, 'utf8'));
+}
+
+function runLaunch(fixture, browser, argumentLog, extraEnv) {
+  return spawnSync(process.execPath, [path.join(fixture, 'src/launch.ts'), browser], {
+    encoding: 'utf8',
+    env: { ...process.env, ARG_LOG: argumentLog, ...extraEnv },
+  });
 }

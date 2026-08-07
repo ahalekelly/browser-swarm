@@ -1,9 +1,9 @@
 ---
-name: browser-swarm-__N__
+name: browser-swarm
 description: __DESCRIPTION__
 model: sonnet
 mcpServers:
-  - playwright__N__:
+  - playwright:
       type: stdio
       command: __NODE__
       args: ["__DIR__/src/launch.ts", "chromium"]
