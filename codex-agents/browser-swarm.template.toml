@@ -8,5 +8,5 @@ __PROMPT__
 """
 
 [mcp_servers.playwright]
-command = "__DIR__/browser-swarm-mcp.sh"
-args = ["__NODE__", "codex"]
+command = "__NODE__"
+args = ["__DIR__/src/launch.ts", "chromium"]

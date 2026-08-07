@@ -1,7 +1,6 @@
-// The idle lease through the real launcher: browser-swarm-mcp.sh is copied
-// into a fixture with a stubbed shared-browser.sh and the fake MCP standing
-// in for the pinned Playwright MCP, with the lease and shutdown grace
-// shortened so five minutes becomes ~100ms.
+// The idle lease through the real TypeScript launcher, with a stub daemon and
+// fake MCP. The lease and shutdown grace are shortened so five minutes becomes
+// about 100ms.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const net = require('node:net');
@@ -200,18 +199,21 @@ async function launchSession(t, extraEnv = {}) {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-idle-'));
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
 
-  copyExecutable('browser-swarm-mcp.sh', fixture);
-  copyExecutable('shared-browser.sh', fixture, '#!/bin/bash\nexit 0\n');
+  copyFile('src/launch.ts', path.join(fixture, 'src/launch.ts'));
+  copyFile('src/mcp-session.ts', path.join(fixture, 'src/mcp-session.ts'));
+  fs.writeFileSync(path.join(fixture, 'src/daemon.ts'), `
+export class DaemonError extends Error { exitCode = 1; }
+export async function ensure() {}
+`);
   copyFile('tests/fixtures/fake-mcp.js', path.join(fixture, 'node_modules/@playwright/mcp/cli.js'));
-  copyFile('mcp-session.js', path.join(fixture, 'mcp-session.js'));
 
-  const launcher = path.join(fixture, 'browser-swarm-mcp.sh');
+  const launcher = path.join(fixture, 'src/launch.ts');
   const source = fs.readFileSync(launcher, 'utf8');
-  const shortened = source.replace('IDLE_MS=300000', 'IDLE_MS=100');
+  const shortened = source.replace('const IDLE_MS = 300_000;', 'const IDLE_MS = 100;');
   assert.notEqual(shortened, source, 'launcher must declare the five-minute lease');
   fs.writeFileSync(launcher, shortened);
 
-  const supervisor = path.join(fixture, 'mcp-session.js');
+  const supervisor = path.join(fixture, 'src/mcp-session.ts');
   const supervisorSource = fs.readFileSync(supervisor, 'utf8');
   fs.writeFileSync(
     supervisor,
@@ -226,7 +228,7 @@ async function launchSession(t, extraEnv = {}) {
   t.after(() => cdp.close());
 
   let stderr = '';
-  const child = spawn(launcher, [process.execPath, '1'], {
+  const child = spawn(process.execPath, [launcher, 'chromium'], {
     env: {
       ...process.env,
       FAKE_CDP_PORT: String(cdp.address().port),
@@ -291,13 +293,6 @@ async function staysOpenFor(socket, milliseconds) {
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-function copyExecutable(source, directory, contents) {
-  const target = path.join(directory, source);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, contents ?? fs.readFileSync(path.join(repo, source)));
-  fs.chmodSync(target, 0o755);
 }
 
 function copyFile(source, target) {

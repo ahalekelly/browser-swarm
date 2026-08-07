@@ -32,4 +32,4 @@ npm ci
 echo
 echo "BrowserSwarm installed at $TARGET"
 echo "The shared browser auto-starts when a swarm agent runs; manage it with:"
-echo "  $TARGET/shared-browser.sh start|status|stop"
+echo "  $TARGET/swarm start|status|stop [chromium]"

@@ -1,14 +1,6 @@
 #!/usr/bin/env node
-// Per-session idle supervisor for the pinned Playwright MCP. It forwards the
-// stdio wire protocol unchanged and owns only the child's lifetime: the
-// five-minute lease arms when the client completes the initialize handshake,
-// renews on every MCP message, and suspends while a request is in flight, so
-// a slow startup or a long tool call is never reaped. On expiry it closes the
-// child's stdin, then escalates to SIGTERM/SIGKILL if shutdown stalls.
-// Closing the child drops its CDP connection and isolated browser context
-// without touching sibling sessions.
-const { spawn } = require('node:child_process');
-const { StringDecoder } = require('node:string_decoder');
+import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 
 const idleMs = Number(process.argv[2]);
 const command = process.argv[3];
@@ -17,14 +9,11 @@ const TERMINATE_AFTER_MS = 1000;
 const KILL_AFTER_MS = 2000;
 
 if (!Number.isSafeInteger(idleMs) || idleMs <= 0 || !command) {
-  console.error('usage: mcp-session.js <idle-ms> <command> [args...]');
+  console.error('usage: mcp-session.ts <idle-ms> <command> [args...]');
   process.exit(2);
 }
 
-const child = spawn(command, args, {
-  stdio: ['pipe', 'pipe', 'inherit'],
-});
-
+const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'inherit'] });
 let initializeId;
 let initializeSucceeded = false;
 let initialized = false;
@@ -56,8 +45,9 @@ child.on('error', (error) => {
 child.on('close', (code, signal) => {
   clearTimeout(idleTimer);
   for (const timer of stopTimers) clearTimeout(timer);
-  if (!stopping && (code !== 0 || signal))
+  if (!stopping && (code !== 0 || signal)) {
     console.error(`BrowserSwarm Playwright MCP exited unexpectedly (${signal ?? `code ${code}`}).`);
+  }
   process.exitCode = stopping ? process.exitCode : (code ?? 1);
   process.stdin.destroy();
 });
@@ -81,8 +71,9 @@ function onClientMessage(message) {
 }
 
 function onServerMessage(message) {
-  if (!initialized && isResponse(message) && key(message.id) === initializeId)
+  if (!initialized && isResponse(message) && key(message.id) === initializeId) {
     initializeSucceeded = 'result' in message;
+  }
   if (!initialized) return;
 
   if (isCancellation(message)) serverRequests.delete(key(message.params.requestId));
@@ -134,7 +125,6 @@ function observe(onMessage) {
       try {
         message = JSON.parse(line);
       } catch {
-        // The pinned MCP owns validation; the supervisor forwards bytes unchanged.
         continue;
       }
       if (!message || typeof message !== 'object' || Array.isArray(message)) continue;

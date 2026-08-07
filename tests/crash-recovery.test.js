@@ -1,9 +1,6 @@
 // The crash-recovery property: after a crash, `ensure` restarts the browser
-// and deliberately exits nonzero so the sacrificed agent reports the crash —
-// and the restarted daemon must survive the harness then killing that failed
-// launcher's whole process group. A copy of shared-browser.sh runs against a
-// fake browser on a random loopback port and never touches the installed
-// daemon.
+// and deliberately exits nonzero so the sacrificed agent reports the crash.
+// The restarted daemon must survive cleanup of that launcher's process group.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const net = require('node:net');
@@ -16,11 +13,11 @@ const repo = path.resolve(__dirname, '..');
 
 test('a post-crash restart survives the sacrificed launcher process group being killed', async (t) => {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-crash-'));
-  const script = path.join(fixture, 'shared-browser.sh');
+  const daemon = path.join(fixture, 'src/daemon.ts');
   const profile = path.join(fixture, 'fingerprint-browser-profile');
   const port = await freePort();
   t.after(() => {
-    spawnSync(script, ['stop']);
+    spawnSync(process.execPath, [daemon, 'stop', 'chromium']);
     fs.rmSync(fixture, { recursive: true, force: true });
   });
 
@@ -31,39 +28,39 @@ test('a post-crash restart survives the sacrificed launcher process group being 
     `#!/bin/bash\nexec "${process.execPath}" "${repo}/tests/fixtures/fake-browser.js" "$@"\n`,
   );
   fs.chmodSync(path.join(binDir, 'Chromium'), 0o755);
+  fs.mkdirSync(path.dirname(daemon), { recursive: true });
   fs.writeFileSync(
-    script,
-    fs.readFileSync(path.join(repo, 'shared-browser.sh'), 'utf8')
-      .replace('PORT=9377', `PORT=${port}`)
-      .replace('IDLE_POLL=30', 'IDLE_POLL=1')
-      .replace('IDLE_POLLS=10', 'IDLE_POLLS=600'),
+    daemon,
+    fs.readFileSync(path.join(repo, 'src/daemon.ts'), 'utf8')
+      .replace('port: 9377,', `port: ${port},`)
+      .replace("connectionLabel: 'CDP http://localhost:9377',", `connectionLabel: 'CDP http://localhost:${port}',`)
+      .replace('const IDLE_POLL_MS = 30_000;', 'const IDLE_POLL_MS = 1_000;')
+      .replace('const IDLE_POLLS = 10;', 'const IDLE_POLLS = 600;')
+      .replace('http://localhost:9377', `http://localhost:${port}`),
   );
-  fs.chmodSync(script, 0o755);
 
-  assert.equal(spawnSync(script, ['start'], { encoding: 'utf8' }).status, 0);
+  assert.equal(runDaemon(daemon, 'start').status, 0);
   assert.equal(await alive(port), true, 'daemon did not come up');
 
-  // Crash: kill the browser uncleanly, leaving daemon-state at `running`.
   process.kill(browserPid(profile), 'SIGKILL');
   await closedWithin(port, 5000);
   assert.match(fs.readFileSync(path.join(fixture, 'daemon-state'), 'utf8'), /^running /);
 
-  // The sacrificial launch: ensure restarts the browser but must exit 1.
-  const launcher = spawn(script, ['ensure'], { detached: true, stdio: 'ignore' });
+  const launcher = spawn(process.execPath, [daemon, 'ensure', 'chromium'], { detached: true, stdio: 'ignore' });
   const [code] = await new Promise((resolve) => launcher.on('exit', (...result) => resolve(result)));
   assert.equal(code, 1, 'post-crash ensure must fail the sacrificed agent');
 
-  // The harness cleans up the failed launcher's process group; the freshly
-  // restarted browser and watchdog must not be in it.
   try { process.kill(-launcher.pid, 'SIGTERM'); } catch (error) {
     if (error.code !== 'ESRCH') throw error;
   }
   await delay(500);
   assert.equal(await alive(port), true, 'restarted daemon died with the launcher process group');
-
-  // The restart cleared the crash state: the next agent attaches normally.
-  assert.equal(spawnSync(script, ['ensure'], { encoding: 'utf8' }).status, 0);
+  assert.equal(runDaemon(daemon, 'ensure').status, 0);
 });
+
+function runDaemon(daemon, verb) {
+  return spawnSync(process.execPath, [daemon, verb, 'chromium'], { encoding: 'utf8' });
+}
 
 function browserPid(profile) {
   const found = spawnSync('pgrep', ['-f', `user-data-dir=${profile}`], { encoding: 'utf8' });

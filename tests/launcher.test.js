@@ -1,6 +1,5 @@
-// Launcher argument shape: both launchers must wrap the pinned MCP in the
-// idle supervisor and hand every invocation a distinct output dir. The node
-// binary is stubbed to log its argv instead of running anything.
+// The TypeScript launcher must wrap the pinned MCP in the idle supervisor and
+// hand every invocation a distinct output directory.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -9,60 +8,47 @@ const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
 const repo = path.resolve(__dirname, '..');
-const launchers = [
-  {
-    script: 'browser-swarm-mcp.sh',
-    tag: 'codex',
-    stub: { 'shared-browser.sh': '#!/bin/bash\nexit 0\n' },
-    pattern: /^\/tmp\/claude\/pwmcp-swarm-codex-\d+$/,
-    mcpArgs: ['--cdp-endpoint', 'http://localhost:9377', '--isolated', '--output-dir'],
-  },
-  {
-    script: 'firefox-mcp.sh',
-    tag: '1',
-    stub: {},
-    pattern: /^\/tmp\/claude\/pwmcp-ff-1-\d+$/,
-    mcpArgs: ['--browser', 'firefox', '--headless', '--isolated', '--output-dir'],
-  },
-];
 
-for (const { script, tag, stub, pattern, mcpArgs } of launchers) {
-  test(`${script} supervises the pinned MCP with a private per-session output dir`, (t) => {
-    const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-launcher-'));
-    t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
-    const launcher = copyExecutable(fixture, script);
-    for (const [name, contents] of Object.entries(stub)) copyExecutable(fixture, name, contents);
-    const node = copyExecutable(fixture, 'node', '#!/bin/bash\nprintf "%s\\n" "$@" > "$ARG_LOG"\n');
+test('launch.ts supervises Chromium MCP with a private per-session output dir', (t) => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-launcher-'));
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  const sourceDir = path.join(fixture, 'src');
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.copyFileSync(path.join(repo, 'src/launch.ts'), path.join(sourceDir, 'launch.ts'));
+  fs.writeFileSync(path.join(sourceDir, 'daemon.ts'), `
+export class DaemonError extends Error { exitCode = 1; }
+export async function ensure() {}
+`);
+  fs.writeFileSync(path.join(sourceDir, 'mcp-session.ts'), `
+import { writeFileSync } from 'node:fs';
+writeFileSync(process.env.ARG_LOG, JSON.stringify(process.argv.slice(2)));
+`);
+  fs.mkdirSync(path.join(fixture, 'node_modules/@playwright/mcp'), { recursive: true });
+  fs.writeFileSync(path.join(fixture, 'node_modules/@playwright/mcp/cli.js'), '');
 
-    const first = launch(launcher, node, tag, path.join(fixture, 'first-args'));
-    const second = launch(launcher, node, tag, path.join(fixture, 'second-args'));
+  const first = launch(fixture, path.join(fixture, 'first-args'));
+  const second = launch(fixture, path.join(fixture, 'second-args'));
 
-    for (const args of [first, second]) {
-      assert.deepEqual(args.slice(0, -1), [
-        path.join(fixture, 'mcp-session.js'),
-        '300000',
-        node,
-        path.join(fixture, 'node_modules/@playwright/mcp/cli.js'),
-        ...mcpArgs,
-      ]);
-      assert.match(args.at(-1), pattern);
-    }
-    assert.notEqual(first.at(-1), second.at(-1), 'two invocations shared an output dir');
-  });
-}
+  for (const args of [first, second]) {
+    assert.deepEqual(args.slice(0, -1), [
+      '300000',
+      process.execPath,
+      path.join(fs.realpathSync(fixture), 'node_modules/@playwright/mcp/cli.js'),
+      '--cdp-endpoint',
+      'http://localhost:9377',
+      '--isolated',
+      '--output-dir',
+    ]);
+    assert.match(args.at(-1), /^\/tmp\/claude\/pwmcp-swarm-\d+$/);
+  }
+  assert.notEqual(first.at(-1), second.at(-1), 'two invocations shared an output dir');
+});
 
-function launch(launcher, node, tag, argumentLog) {
-  const result = spawnSync(launcher, [node, tag], {
+function launch(fixture, argumentLog) {
+  const result = spawnSync(process.execPath, [path.join(fixture, 'src/launch.ts'), 'chromium'], {
     encoding: 'utf8',
     env: { ...process.env, ARG_LOG: argumentLog },
   });
   assert.equal(result.status, 0, result.stderr);
-  return fs.readFileSync(argumentLog, 'utf8').trim().split('\n');
-}
-
-function copyExecutable(directory, source, contents) {
-  const target = path.join(directory, source);
-  fs.writeFileSync(target, contents ?? fs.readFileSync(path.join(repo, source)));
-  fs.chmodSync(target, 0o755);
-  return target;
+  return JSON.parse(fs.readFileSync(argumentLog, 'utf8'));
 }

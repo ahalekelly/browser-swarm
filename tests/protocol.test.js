@@ -1,5 +1,5 @@
 // The supervisor must be invisible on the wire: the real pinned Playwright
-// MCP is driven through a full handshake directly and under mcp-session.js,
+// MCP is driven through a full handshake directly and under mcp-session.ts,
 // and the two transcripts must match byte for byte.
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -20,7 +20,7 @@ const mcpArgs = [
 test('the lease supervisor preserves the pinned Playwright MCP wire protocol', async (t) => {
   const direct = await handshake(t, node, mcpArgs);
   const supervised = await handshake(t, node, [
-    path.join(repo, 'mcp-session.js'),
+    path.join(repo, 'src/mcp-session.ts'),
     '10000',
     node,
     ...mcpArgs,

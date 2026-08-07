@@ -5,8 +5,8 @@ model: sonnet
 mcpServers:
   - playwright__N__:
       type: stdio
-      command: __DIR__/browser-swarm-mcp.sh
-      args: ["__NODE__", "__N__"]
+      command: __NODE__
+      args: ["__DIR__/src/launch.ts", "chromium"]
 ---
 
 __PROMPT__
