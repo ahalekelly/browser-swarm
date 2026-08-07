@@ -26,6 +26,7 @@ fi
 cd "$TARGET"
 npm ci
 ./install-fingerprint-chromium.sh
+./install-playwright-firefox.sh
 ./claude-agents/install-agents.sh
 ./codex-agents/install-agents.sh
 

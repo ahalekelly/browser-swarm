@@ -8,8 +8,41 @@ const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
 const repo = path.resolve(__dirname, '..');
+const browsers = [
+  {
+    name: 'chromium',
+    endpoint: ['--cdp-endpoint', 'http://localhost:9377'],
+    output: /^\/tmp\/claude\/pwmcp-swarm-\d+$/,
+  },
+  {
+    name: 'firefox',
+    endpoint: ['--endpoint', 'ws://[::1]:9378/browser-swarm'],
+    output: /^\/tmp\/claude\/pwmcp-firefox-\d+$/,
+  },
+];
 
-test('launch.ts supervises Chromium MCP with a private per-session output dir', (t) => {
+for (const browser of browsers) {
+  test(`launch.ts supervises ${browser.name} MCP with a private per-session output dir`, (t) => {
+    const fixture = createFixture(t);
+    const first = launch(fixture, browser.name, path.join(fixture, 'first-args'));
+    const second = launch(fixture, browser.name, path.join(fixture, 'second-args'));
+
+    for (const args of [first, second]) {
+      assert.deepEqual(args.slice(0, -1), [
+        '300000',
+        process.execPath,
+        path.join(fs.realpathSync(fixture), 'node_modules/@playwright/mcp/cli.js'),
+        ...browser.endpoint,
+        '--isolated',
+        '--output-dir',
+      ]);
+      assert.match(args.at(-1), browser.output);
+    }
+    assert.notEqual(first.at(-1), second.at(-1), 'two invocations shared an output dir');
+  });
+}
+
+function createFixture(t) {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-launcher-'));
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
   const sourceDir = path.join(fixture, 'src');
@@ -18,6 +51,7 @@ test('launch.ts supervises Chromium MCP with a private per-session output dir', 
   fs.writeFileSync(path.join(sourceDir, 'daemon.ts'), `
 export class DaemonError extends Error { exitCode = 1; }
 export async function ensure() {}
+export async function firefoxEndpoint() { return 'ws://[::1]:9378/browser-swarm'; }
 `);
   fs.writeFileSync(path.join(sourceDir, 'mcp-session.ts'), `
 import { writeFileSync } from 'node:fs';
@@ -25,27 +59,11 @@ writeFileSync(process.env.ARG_LOG, JSON.stringify(process.argv.slice(2)));
 `);
   fs.mkdirSync(path.join(fixture, 'node_modules/@playwright/mcp'), { recursive: true });
   fs.writeFileSync(path.join(fixture, 'node_modules/@playwright/mcp/cli.js'), '');
+  return fixture;
+}
 
-  const first = launch(fixture, path.join(fixture, 'first-args'));
-  const second = launch(fixture, path.join(fixture, 'second-args'));
-
-  for (const args of [first, second]) {
-    assert.deepEqual(args.slice(0, -1), [
-      '300000',
-      process.execPath,
-      path.join(fs.realpathSync(fixture), 'node_modules/@playwright/mcp/cli.js'),
-      '--cdp-endpoint',
-      'http://localhost:9377',
-      '--isolated',
-      '--output-dir',
-    ]);
-    assert.match(args.at(-1), /^\/tmp\/claude\/pwmcp-swarm-\d+$/);
-  }
-  assert.notEqual(first.at(-1), second.at(-1), 'two invocations shared an output dir');
-});
-
-function launch(fixture, argumentLog) {
-  const result = spawnSync(process.execPath, [path.join(fixture, 'src/launch.ts'), 'chromium'], {
+function launch(fixture, browser, argumentLog) {
+  const result = spawnSync(process.execPath, [path.join(fixture, 'src/launch.ts'), browser], {
     encoding: 'utf8',
     env: { ...process.env, ARG_LOG: argumentLog },
   });

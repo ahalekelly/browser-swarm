@@ -204,6 +204,7 @@ async function launchSession(t, extraEnv = {}) {
   fs.writeFileSync(path.join(fixture, 'src/daemon.ts'), `
 export class DaemonError extends Error { exitCode = 1; }
 export async function ensure() {}
+export async function firefoxEndpoint() { return 'ws://[::1]:9378/browser-swarm'; }
 `);
   copyFile('tests/fixtures/fake-mcp.js', path.join(fixture, 'node_modules/@playwright/mcp/cli.js'));
 

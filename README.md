@@ -25,6 +25,7 @@ git clone https://github.com/ahalekelly/browser-swarm.git
 cd browser-swarm
 npm ci                              # pinned @playwright/mcp
 ./install-fingerprint-chromium.sh   # one-time browser install, checksum-verified
+./install-playwright-firefox.sh     # pinned Playwright-managed Firefox fallback
 ./claude-agents/install-agents.sh   # generate the agent definitions
 ./codex-agents/install-agents.sh
 ```
@@ -34,16 +35,12 @@ npm ci                              # pinned @playwright/mcp
 The daemon auto-starts when a swarm agent attaches (see the crash rules below), so routine fan-outs need no manual step. The verbs:
 
 ```sh
-./swarm start chromium   # idempotent — exit 0 if our daemon is already up
+./swarm start chromium   # idempotent — use firefox for the fallback daemon
 ./swarm status chromium  # pid + watchdog + attached clients + open pages + crash state
 ./swarm stop chromium    # rarely needed; the watchdog stops idle daemons
 ```
 
-Point any Playwright MCP instance at it:
-
-```
---cdp-endpoint http://localhost:9377 --isolated
-```
+Chromium clients attach with `--cdp-endpoint http://localhost:9377 --isolated`. Firefox clients read the daemon's reported WebSocket endpoint from `firefox-ws-endpoint` and attach with `--endpoint <ws> --isolated`; the endpoint host is used verbatim.
 
 `--isolated` is mandatory, and it composes with `--cdp-endpoint` rather than replacing it. With `--cdp-endpoint` alone every attached instance lands in the browser's default context and they hijack each other's tabs; adding `--isolated` gives each instance its own context.
 
@@ -57,7 +54,7 @@ npm test
 
 ## Agent definitions
 
-[`claude-agents/`](claude-agents/) holds ten sibling Claude Code subagent definitions (`browser-swarm-1` … `browser-swarm-10`), while [`codex-agents/`](codex-agents/) holds one reusable Codex custom-agent definition (`browser-swarm`). Their `install-agents.sh` scripts generate the definitions into `~/.claude/agents/` and `~/.codex/agents/`; the npx install runs both. The Claude directory also includes a launched-mode Firefox variant for sites where Chromium is blocked, copied by hand.
+[`claude-agents/`](claude-agents/) holds ten sibling Claude Code subagent definitions (`browser-swarm-1` … `browser-swarm-10`), while [`codex-agents/`](codex-agents/) holds one reusable Codex custom-agent definition (`browser-swarm`). Their `install-agents.sh` scripts generate the definitions into `~/.claude/agents/` and `~/.codex/agents/`; the npx install runs both. The Claude installer also generates a shared-daemon Firefox variant for sites where Chromium is blocked.
 
 The Claude definitions must be ten near-identical files rather than one because Claude Code shares a single MCP session between concurrent subagents whose inline servers carry the same name, so each sibling declares its own — see [docs/claude-code-mcp-dedup.md](docs/claude-code-mcp-dedup.md). Codex launches a separate MCP session and isolated browser context for each invocation of the reusable definition.
 
