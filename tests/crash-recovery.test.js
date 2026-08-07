@@ -12,7 +12,7 @@ const test = require('node:test');
 const repo = path.resolve(__dirname, '..');
 
 test('a post-crash restart survives the sacrificed launcher process group being killed', async (t) => {
-  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-crash-'));
+  const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-crash-')));
   const daemon = path.join(fixture, 'src/daemon.ts');
   const profile = path.join(fixture, 'fingerprint-browser-profile');
   const port = await freePort();

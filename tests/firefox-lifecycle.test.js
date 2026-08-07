@@ -12,7 +12,7 @@ const test = require('node:test');
 const repo = path.resolve(__dirname, '..');
 
 test('the Firefox backend starts one owned server and preserves its reported endpoint', async (t) => {
-  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-firefox-'));
+  const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-firefox-')));
   const daemon = path.join(fixture, 'src/daemon.ts');
   const port = await freePort();
   t.after(() => {

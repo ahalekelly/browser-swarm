@@ -196,7 +196,7 @@ test('valid non-message JSON does not renew the idle lease', async (t) => {
 });
 
 async function launchSession(t, extraEnv = {}) {
-  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-idle-'));
+  const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-idle-')));
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
 
   copyFile('src/launch.ts', path.join(fixture, 'src/launch.ts'));
@@ -232,6 +232,8 @@ export async function firefoxEndpoint() { return 'ws://[::1]:9378/browser-swarm'
   const child = spawn(process.execPath, [launcher, 'chromium'], {
     env: {
       ...process.env,
+      // Satisfy the launcher canary even when the suite runs under Claude Code.
+      CLAUDE_MCP_PER_AGENT: '1',
       FAKE_CDP_PORT: String(cdp.address().port),
       ...extraEnv,
     },

@@ -64,7 +64,7 @@ test('two MCP sessions use isolated contexts on one Firefox daemon', async (t) =
 });
 
 async function startMcp(t, endpoint) {
-  const output = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-firefox-mcp-'));
+  const output = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-firefox-mcp-')));
   const child = spawn(process.execPath, [
     mcp,
     '--endpoint', endpoint,

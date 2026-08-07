@@ -76,7 +76,7 @@ test('Claude canary accepts the per-agent stamp', (t) => {
 });
 
 function createFixture(t) {
-  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-launcher-'));
+  const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-launcher-')));
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
   const sourceDir = path.join(fixture, 'src');
   fs.mkdirSync(sourceDir, { recursive: true });
