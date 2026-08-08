@@ -17,7 +17,9 @@ test('a post-crash restart survives the sacrificed launcher process group being 
   const profile = path.join(fixture, 'fingerprint-browser-profile');
   const port = await freePort();
   t.after(() => {
-    spawnSync(process.execPath, [daemon, 'stop', 'chromium']);
+    // fetch()'s keep-alive connections from alive() can linger past the test,
+    // so a plain stop would refuse with attached clients and leak the browser.
+    spawnSync(process.execPath, [daemon, 'stop', 'chromium', '--force']);
     fs.rmSync(fixture, { recursive: true, force: true });
   });
 

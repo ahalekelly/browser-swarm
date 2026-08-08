@@ -1,6 +1,6 @@
 // Firefox uses the same detached lifecycle as Chromium. A fake playwright-core
 // launchServer keeps this test fast while preserving the listener, endpoint,
-// ownership, watchdog, and clean-stop behavior.
+// ownership, watchdog, attached-client stop guard, and clean-stop behavior.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const net = require('node:net');
@@ -45,6 +45,15 @@ test('the Firefox backend starts one owned server and preserves its reported end
   assert.equal(status.status, 0, status.stderr);
   assert.match(status.stdout, new RegExp(`endpoint: ws://\\[::1\\]:${port}/browser-swarm`));
 
+  const client = net.createConnection(port, '::1');
+  await new Promise((resolve, reject) => client.once('connect', resolve).once('error', reject));
+  const refused = run(daemon, 'stop');
+  assert.equal(refused.status, 1, 'stop must refuse while a client is attached');
+  assert.match(refused.stderr, /1 attached client — refusing to stop/);
+  assert.equal(listenerPid(port), owner, 'refused stop must leave the server running');
+  client.destroy();
+  await noClientsWithin(port, owner, 5000);
+
   const stopped = run(daemon, 'stop');
   assert.equal(stopped.status, 0, stopped.stderr);
   assert.match(stopped.stdout, /shared Firefox browser stopped/);
@@ -66,7 +75,7 @@ export const firefox = {
   executablePath: () => ${JSON.stringify(executable)},
   launchServer: ({ port, wsPath }) => new Promise((resolve) => {
     const events = new EventEmitter();
-    const listener = createServer((socket) => socket.end());
+    const listener = createServer(() => {});
     listener.listen(port, '::1', () => resolve({
       wsEndpoint: () => \`ws://[::1]:\${port}\${wsPath}\`,
       on: events.on.bind(events),
@@ -93,6 +102,17 @@ function listenerPid(port) {
 function listenerPids(port) {
   const result = spawnSync('lsof', ['-t', '-i', `:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' });
   return result.status === 0 ? result.stdout.trim().split(/\s+/).filter(Boolean).map(Number) : [];
+}
+
+async function noClientsWithin(port, owner, milliseconds) {
+  for (let waited = 0; waited < milliseconds; waited += 100) {
+    const result = spawnSync('lsof', ['-t', '-i', `:${port}`, '-sTCP:ESTABLISHED'], { encoding: 'utf8' });
+    const pids = new Set(result.status === 0 ? result.stdout.trim().split(/\s+/).filter(Boolean).map(Number) : []);
+    pids.delete(owner);
+    if (pids.size === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.fail('client connection never cleared');
 }
 
 function freePort() {

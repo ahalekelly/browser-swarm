@@ -77,7 +77,7 @@ Both agent families splice their operating prompt from [agent-prompt.md](agent-p
 
 **Relaunch after an idle disconnect.** An initialized MCP session closes after five minutes without activity. An in-flight request suspends its lease. A fresh agent gets a fresh isolated context.
 
-**Do not stop a daemon after a fan-out.** Another session may still use it. The watchdog stops it after ten consecutive 30-second polls with no attached clients.
+**Do not stop a daemon after a fan-out.** Another session may still use it, so `stop` refuses while clients are attached (`--force` overrides). The watchdog stops it after ten consecutive 30-second polls with no attached clients.
 
 ## How it works
 

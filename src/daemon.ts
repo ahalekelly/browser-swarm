@@ -193,7 +193,7 @@ async function serveFirefox(backend: Backend, marker: string): Promise<void> {
   await new Promise((resolveClose) => server.on('close', resolveClose));
 }
 
-async function stop(backend: Backend, reporter: Reporter): Promise<void> {
+async function stop(backend: Backend, reporter: Reporter, force: boolean): Promise<void> {
   const owner = ownerPid(backend);
   if (owner === undefined) {
     if (await ready(backend) || hasListener(backend.port)) {
@@ -205,6 +205,11 @@ async function stop(backend: Backend, reporter: Reporter): Promise<void> {
     }
     reporter.out(`${backend.displayName} already stopped`);
     return;
+  }
+
+  const clients = clientCount(backend, owner);
+  if (clients > 0 && !force) {
+    throw new DaemonError(`${clients} attached client${clients === 1 ? '' : 's'} — refusing to stop the machine-wide ${backend.displayName} (it stops itself after ${(IDLE_POLL_MS * IDLE_POLLS) / 1000}s with no clients; pass --force to override)`);
   }
 
   markClean(backend);
@@ -404,12 +409,15 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const [verb, browser = 'chromium', argument] = process.argv.slice(2);
+  const rest = process.argv.slice(2);
+  const force = rest.includes('--force');
+  const [verb, browser = 'chromium', argument] = rest.filter((arg) => arg !== '--force');
+  if (force && verb !== 'stop') throw new DaemonError('--force only applies to stop', 2);
   if (browser !== 'chromium' && browser !== 'firefox') throw new DaemonError(`unknown browser: ${browser}`, 2);
   const backend = getBackend(browser);
 
   if (verb === 'start') await start(backend, defaultReporter);
-  else if (verb === 'stop') await stop(backend, defaultReporter);
+  else if (verb === 'stop') await stop(backend, defaultReporter, force);
   else if (verb === 'status') process.exitCode = await status(backend, defaultReporter);
   else if (verb === 'ensure') await ensure(browser);
   else if (verb === 'watchdog') {
@@ -419,7 +427,7 @@ async function main(): Promise<void> {
     if (!argument) throw new DaemonError('Firefox server needs the ownership marker', 2);
     await serveFirefox(backend, argument);
   } else {
-    throw new DaemonError('usage: swarm start|stop|status [chromium|firefox]', 2);
+    throw new DaemonError('usage: swarm start|stop [--force]|status [chromium|firefox]', 2);
   }
 }
 

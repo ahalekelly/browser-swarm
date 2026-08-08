@@ -24,7 +24,7 @@ test('two MCP sessions use isolated contexts on one Firefox daemon', async (t) =
   runDaemon('stop');
   const started = runDaemon('start');
   assert.equal(started.status, 0, started.stderr);
-  t.after(() => runDaemon('stop'));
+  t.after(() => runDaemon('stop', '--force'));
 
   const endpoint = fs.readFileSync(path.join(repo, 'firefox-ws-endpoint'), 'utf8').trim();
   assert.match(endpoint, /^ws:\/\//);
@@ -131,8 +131,8 @@ function messageQueue(stream) {
   };
 }
 
-function runDaemon(verb) {
-  return spawnSync(process.execPath, [daemon, verb, 'firefox'], { encoding: 'utf8' });
+function runDaemon(verb, ...flags) {
+  return spawnSync(process.execPath, [daemon, verb, 'firefox', ...flags], { encoding: 'utf8' });
 }
 
 function listenerPid(port) {
