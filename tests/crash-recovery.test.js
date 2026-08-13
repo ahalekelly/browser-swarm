@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import test from 'node:test';
 import {
@@ -26,7 +27,7 @@ test('a post-crash restart survives the sacrificed launcher process group being 
     ['const IDLE_POLLS = 10;', 'const IDLE_POLLS = 600;'],
   ]);
   t.after(() => {
-    runDaemon(daemon, 'stop', 'chromium', '--force');
+    runDaemon(daemon, 'stop');
     fs.rmSync(fixture, { recursive: true, force: true });
   });
 
@@ -57,9 +58,13 @@ function browserPid(profile) {
 }
 
 function alive(port) {
-  return fetch(`http://127.0.0.1:${port}/json/version`)
-    .then((response) => response.ok)
-    .catch(() => false);
+  return new Promise((resolve) => {
+    const request = http.get({ host: '127.0.0.1', port, path: '/json/version', agent: false }, (response) => {
+      response.resume();
+      resolve(response.statusCode === 200);
+    });
+    request.on('error', () => resolve(false));
+  });
 }
 
 async function closedWithin(port, milliseconds) {

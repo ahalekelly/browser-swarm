@@ -1,6 +1,7 @@
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { get } from 'node:http';
 import { createConnection } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -278,16 +279,23 @@ async function status(backend: Backend): Promise<number> {
 
 async function ready(backend: Backend): Promise<boolean> {
   if (backend.browserName === 'firefox') return portOpen(backend.port);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2000);
-  try {
-    const response = await fetch(`http://127.0.0.1:${backend.port}/json/version`, { signal: controller.signal });
-    return response.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timeout);
-  }
+  return new Promise((resolveReady) => {
+    const request = get({
+      host: '127.0.0.1',
+      port: backend.port,
+      path: '/json/version',
+      agent: false,
+      timeout: 2000,
+    }, (response) => {
+      response.resume();
+      resolveReady(response.statusCode !== undefined && response.statusCode >= 200 && response.statusCode < 300);
+    });
+    request.once('error', () => resolveReady(false));
+    request.once('timeout', () => {
+      request.destroy();
+      resolveReady(false);
+    });
+  });
 }
 
 function portOpen(port: number): Promise<boolean> {
