@@ -1,50 +1,41 @@
-// The crash-recovery property: after a crash, `ensure` restarts the browser
-// and deliberately exits nonzero so the sacrificed agent reports the crash.
-// The restarted daemon must survive cleanup of that launcher's process group.
+// After a crash, ensure restarts the browser and deliberately fails so the
+// sacrificed agent reports it. The restarted supervisor must survive cleanup
+// of that launcher's process group.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const net = require('node:net');
-const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const test = require('node:test');
-
-const repo = path.resolve(__dirname, '..');
+const {
+  delay,
+  freePort,
+  installFakeChromium,
+  runDaemon,
+  tempFixture,
+  writeDaemonFixture,
+} = require('./helpers');
 
 test('a post-crash restart survives the sacrificed launcher process group being killed', async (t) => {
-  const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-crash-')));
-  const daemon = path.join(fixture, 'src/daemon.ts');
-  const profile = path.join(fixture, 'fingerprint-browser-profile');
+  const fixture = tempFixture('browser-swarm-crash-');
+  const profile = path.join(fixture, 'chromium-browser-profile');
   const port = await freePort();
+  installFakeChromium(fixture);
+  const daemon = writeDaemonFixture(fixture, [
+    ['const port = firefox ? 9378 : 9377;', `const port = firefox ? 9378 : ${port};`],
+    ['const IDLE_POLL_MS = 30_000;', 'const IDLE_POLL_MS = 1_000;'],
+    ['const IDLE_POLLS = 10;', 'const IDLE_POLLS = 600;'],
+  ]);
   t.after(() => {
-    // fetch()'s keep-alive connections from alive() can linger past the test,
-    // so a plain stop would refuse with attached clients and leak the browser.
-    spawnSync(process.execPath, [daemon, 'stop', 'chromium', '--force']);
+    runDaemon(daemon, 'stop', 'chromium', '--force');
     fs.rmSync(fixture, { recursive: true, force: true });
   });
-
-  const binDir = path.join(fixture, 'fingerprint-chromium/Chromium.app/Contents/MacOS');
-  fs.mkdirSync(binDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(binDir, 'Chromium'),
-    `#!/bin/bash\nexec "${process.execPath}" "${repo}/tests/fixtures/fake-browser.js" "$@"\n`,
-  );
-  fs.chmodSync(path.join(binDir, 'Chromium'), 0o755);
-  fs.mkdirSync(path.dirname(daemon), { recursive: true });
-  fs.writeFileSync(
-    daemon,
-    fs.readFileSync(path.join(repo, 'src/daemon.ts'), 'utf8')
-      .replace('port: 9377,', `port: ${port},`)
-      .replace('const IDLE_POLL_MS = 30_000;', 'const IDLE_POLL_MS = 1_000;')
-      .replace('const IDLE_POLLS = 10;', 'const IDLE_POLLS = 600;'),
-  );
 
   assert.equal(runDaemon(daemon, 'start').status, 0);
   assert.equal(await alive(port), true, 'daemon did not come up');
 
   process.kill(browserPid(profile), 'SIGKILL');
   await closedWithin(port, 5000);
-  assert.match(fs.readFileSync(path.join(fixture, 'daemon-state'), 'utf8'), /^running /);
+  assert.match(fs.readFileSync(path.join(fixture, 'chromium-daemon-state'), 'utf8'), /^running /);
 
   const launcher = spawn(process.execPath, [daemon, 'ensure', 'chromium'], { detached: true, stdio: 'ignore' });
   const [code] = await new Promise((resolve) => launcher.on('exit', (...result) => resolve(result)));
@@ -57,10 +48,6 @@ test('a post-crash restart survives the sacrificed launcher process group being 
   assert.equal(await alive(port), true, 'restarted daemon died with the launcher process group');
   assert.equal(runDaemon(daemon, 'ensure').status, 0);
 });
-
-function runDaemon(daemon, verb) {
-  return spawnSync(process.execPath, [daemon, verb, 'chromium'], { encoding: 'utf8' });
-}
 
 function browserPid(profile) {
   const found = spawnSync('pgrep', ['-f', `user-data-dir=${profile}`], { encoding: 'utf8' });
@@ -81,18 +68,4 @@ async function closedWithin(port, milliseconds) {
     await delay(100);
   }
   assert.fail('port never closed after the browser was killed');
-}
-
-function freePort() {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

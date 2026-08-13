@@ -1,65 +1,80 @@
-// Firefox uses the same detached lifecycle as Chromium. A fake playwright-core
-// launchServer keeps this test fast while preserving the listener, endpoint,
-// ownership, watchdog, attached-client stop guard, and clean-stop behavior.
+// Firefox uses the same detached serve lifecycle as Chromium. A fake
+// playwright-core keeps these tests fast while preserving listener ownership,
+// attached-client guards, signals, idle expiry, and marker behavior.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const net = require('node:net');
-const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
+const { delay, freePort, runDaemon, tempFixture, writeDaemonFixture } = require('./helpers');
 
-const repo = path.resolve(__dirname, '..');
+test('Firefox starts one owned server at its constant endpoint and stops cleanly', async (t) => {
+  const fixture = await firefoxFixture(t);
+  const started = runDaemon(fixture.daemon, 'start', 'firefox');
+  assert.equal(started.status, 0, started.stderr);
+  assert.match(started.stderr, /shared Firefox browser up/);
 
-test('the Firefox backend starts one owned server and preserves its reported endpoint', async (t) => {
-  const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-firefox-')));
-  const daemon = path.join(fixture, 'src/daemon.ts');
+  const owner = listenerPid(fixture.port);
+  const repeated = runDaemon(fixture.daemon, 'start', 'firefox');
+  assert.equal(repeated.status, 0, repeated.stderr);
+  assert.match(repeated.stderr, new RegExp(`already up: pid ${owner}`));
+  assert.equal(listenerPid(fixture.port), owner);
+
+  const status = runDaemon(fixture.daemon, 'status', 'firefox');
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stderr, new RegExp(`endpoint: ws://127\\.0\\.0\\.1:${fixture.port}/browser-swarm`));
+
+  const client = net.createConnection(fixture.port, '127.0.0.1');
+  await new Promise((resolve, reject) => client.once('connect', resolve).once('error', reject));
+  const refused = runDaemon(fixture.daemon, 'stop', 'firefox');
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /1 attached client — refusing to stop/);
+  assert.equal(listenerPid(fixture.port), owner);
+  client.destroy();
+  await noClientsWithin(fixture.port, owner, 5000);
+
+  const stopped = runDaemon(fixture.daemon, 'stop', 'firefox');
+  assert.equal(stopped.status, 0, stopped.stderr);
+  assert.match(stopped.stderr, /shared Firefox browser stopped/);
+  assert.equal(listenerPids(fixture.port).length, 0);
+  assert.equal(state(fixture), 'clean\n');
+});
+
+test('external SIGTERM of the Firefox supervisor leaves the crash marker running', async (t) => {
+  const fixture = await firefoxFixture(t);
+  assert.equal(runDaemon(fixture.daemon, 'start', 'firefox').status, 0);
+  process.kill(listenerPid(fixture.port), 'SIGTERM');
+  await closedWithin(fixture.port, 5000);
+  assert.match(state(fixture), /^running /);
+});
+
+test('Firefox idle expiry writes a clean marker', async (t) => {
+  const fixture = await firefoxFixture(t, true);
+  assert.equal(runDaemon(fixture.daemon, 'start', 'firefox').status, 0);
+  await closedWithin(fixture.port, 5000);
+  assert.equal(state(fixture), 'clean\n');
+});
+
+async function firefoxFixture(t, shortIdle = false) {
+  const fixture = tempFixture('browser-swarm-firefox-');
   const port = await freePort();
+  const replacements = [
+    ["const FIREFOX_ENDPOINT = 'ws://127.0.0.1:9378/browser-swarm';", `const FIREFOX_ENDPOINT = 'ws://127.0.0.1:${port}/browser-swarm';`],
+    ['const port = firefox ? 9378 : 9377;', `const port = firefox ? ${port} : 9377;`],
+  ];
+  if (shortIdle) replacements.push(
+    ['const IDLE_POLL_MS = 30_000;', 'const IDLE_POLL_MS = 50;'],
+    ['const IDLE_POLLS = 10;', 'const IDLE_POLLS = 2;'],
+  );
+  const daemon = writeDaemonFixture(fixture, replacements);
+  installFakePlaywright(fixture);
   t.after(() => {
-    run(daemon, 'stop');
+    runDaemon(daemon, 'stop', 'firefox', '--force');
     fs.rmSync(fixture, { recursive: true, force: true });
   });
-
-  fs.mkdirSync(path.dirname(daemon), { recursive: true });
-  fs.writeFileSync(
-    daemon,
-    fs.readFileSync(path.join(repo, 'src/daemon.ts'), 'utf8').replace('port: 9378,', `port: ${port},`),
-  );
-  installFakePlaywright(fixture);
-
-  const started = run(daemon, 'start');
-  assert.equal(started.status, 0, started.stderr);
-  assert.match(started.stdout, /shared Firefox browser up/);
-  assert.equal(
-    fs.readFileSync(path.join(fixture, 'firefox-ws-endpoint'), 'utf8').trim(),
-    `ws://[::1]:${port}/browser-swarm`,
-  );
-
-  const owner = listenerPid(port);
-  const repeated = run(daemon, 'start');
-  assert.equal(repeated.status, 0, repeated.stderr);
-  assert.match(repeated.stdout, new RegExp(`already up: pid ${owner}`));
-  assert.equal(listenerPid(port), owner, 'idempotent start replaced the Firefox server');
-
-  const status = run(daemon, 'status');
-  assert.equal(status.status, 0, status.stderr);
-  assert.match(status.stdout, new RegExp(`endpoint: ws://\\[::1\\]:${port}/browser-swarm`));
-
-  const client = net.createConnection(port, '::1');
-  await new Promise((resolve, reject) => client.once('connect', resolve).once('error', reject));
-  const refused = run(daemon, 'stop');
-  assert.equal(refused.status, 1, 'stop must refuse while a client is attached');
-  assert.match(refused.stderr, /1 attached client — refusing to stop/);
-  assert.equal(listenerPid(port), owner, 'refused stop must leave the server running');
-  client.destroy();
-  await noClientsWithin(port, owner, 5000);
-
-  const stopped = run(daemon, 'stop');
-  assert.equal(stopped.status, 0, stopped.stderr);
-  assert.match(stopped.stdout, /shared Firefox browser stopped/);
-  assert.equal(listenerPids(port).length, 0);
-  assert.equal(fs.readFileSync(path.join(fixture, 'firefox-daemon-state'), 'utf8'), 'clean\n');
-});
+  return { daemon, dir: fixture, port };
+}
 
 function installFakePlaywright(fixture) {
   const moduleDir = path.join(fixture, 'node_modules/playwright-core');
@@ -73,11 +88,11 @@ import { EventEmitter } from 'node:events';
 import { createServer } from 'node:net';
 export const firefox = {
   executablePath: () => ${JSON.stringify(executable)},
-  launchServer: ({ port, wsPath }) => new Promise((resolve) => {
+  launchServer: ({ host, port, wsPath }) => new Promise((resolve) => {
     const events = new EventEmitter();
     const listener = createServer(() => {});
-    listener.listen(port, '::1', () => resolve({
-      wsEndpoint: () => \`ws://[::1]:\${port}\${wsPath}\`,
+    listener.listen(port, host, () => resolve({
+      wsEndpoint: () => \`ws://\${host}:\${port}\${wsPath}\`,
       on: events.on.bind(events),
       close: () => new Promise((closed) => listener.close(() => {
         events.emit('close');
@@ -89,8 +104,8 @@ export const firefox = {
 `);
 }
 
-function run(daemon, verb) {
-  return spawnSync(process.execPath, [daemon, verb, 'firefox'], { encoding: 'utf8' });
+function state(fixture) {
+  return fs.readFileSync(path.join(fixture.dir, 'firefox-daemon-state'), 'utf8');
 }
 
 function listenerPid(port) {
@@ -110,17 +125,15 @@ async function noClientsWithin(port, owner, milliseconds) {
     const pids = new Set(result.status === 0 ? result.stdout.trim().split(/\s+/).filter(Boolean).map(Number) : []);
     pids.delete(owner);
     if (pids.size === 0) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await delay(100);
   }
   assert.fail('client connection never cleared');
 }
 
-function freePort() {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    server.listen(0, '::1', () => {
-      const { port } = server.address();
-      server.close(() => resolve(port));
-    });
-  });
+async function closedWithin(port, milliseconds) {
+  for (let waited = 0; waited < milliseconds; waited += 50) {
+    if (listenerPids(port).length === 0) return;
+    await delay(50);
+  }
+  assert.fail(`port ${port} never closed`);
 }

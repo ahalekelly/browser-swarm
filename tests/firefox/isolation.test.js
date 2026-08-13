@@ -3,10 +3,10 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
-const readline = require('node:readline');
 const { once } = require('node:events');
 const { spawn, spawnSync } = require('node:child_process');
 const test = require('node:test');
+const { messageQueue } = require('../helpers');
 
 const repo = path.resolve(__dirname, '../..');
 const daemon = path.join(repo, 'src/daemon.ts');
@@ -26,8 +26,7 @@ test('two MCP sessions use isolated contexts on one Firefox daemon', async (t) =
   assert.equal(started.status, 0, started.stderr);
   t.after(() => runDaemon('stop', '--force'));
 
-  const endpoint = fs.readFileSync(path.join(repo, 'firefox-ws-endpoint'), 'utf8').trim();
-  assert.match(endpoint, /^ws:\/\//);
+  const endpoint = 'ws://127.0.0.1:9378/browser-swarm';
   const daemonPid = listenerPid(9378);
   assert.equal(directFirefoxChildren(daemonPid), 1, 'Firefox daemon launched more than one browser process');
 
@@ -110,24 +109,6 @@ async function startMcp(t, endpoint) {
       return result.content.map((item) => item.text ?? '').join('\n');
     },
     stop,
-  };
-}
-
-function messageQueue(stream) {
-  const queued = [];
-  const waiting = [];
-  readline.createInterface({ input: stream }).on('line', (line) => {
-    queued.push(JSON.parse(line));
-    for (const wake of waiting.splice(0)) wake();
-  });
-  return {
-    async next(matches) {
-      for (;;) {
-        const index = queued.findIndex(matches);
-        if (index !== -1) return queued.splice(index, 1)[0];
-        await new Promise((resolve) => waiting.push(resolve));
-      }
-    },
   };
 }
 

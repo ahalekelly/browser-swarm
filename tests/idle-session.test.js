@@ -4,15 +4,17 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const net = require('node:net');
-const os = require('node:os');
 const path = require('node:path');
-const readline = require('node:readline');
 const { spawn } = require('node:child_process');
 const { EventEmitter, once } = require('node:events');
 const test = require('node:test');
-
-const repo = path.resolve(__dirname, '..');
-const initializeRequest = { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} };
+const {
+  copy,
+  delay,
+  initializeRequest,
+  messageQueue,
+  tempFixture,
+} = require('./helpers');
 
 test('the launcher drops an attached MCP session after five idle minutes', async (t) => {
   const session = await launchSession(t);
@@ -196,32 +198,25 @@ test('valid non-message JSON does not renew the idle lease', async (t) => {
 });
 
 async function launchSession(t, extraEnv = {}) {
-  const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-idle-')));
+  const fixture = tempFixture('browser-swarm-idle-');
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
 
-  copyFile('src/launch.ts', path.join(fixture, 'src/launch.ts'));
-  copyFile('src/mcp-session.ts', path.join(fixture, 'src/mcp-session.ts'));
+  copy('src/launch.ts', path.join(fixture, 'src/launch.ts'));
   fs.writeFileSync(path.join(fixture, 'src/daemon.ts'), `
 export class DaemonError extends Error { exitCode = 1; }
 export async function ensure() {}
-export async function firefoxEndpoint() { return 'ws://[::1]:9378/browser-swarm'; }
+export function getBackend() { return { clientEndpoint: 'http://localhost:9377' }; }
 `);
-  copyFile('tests/fixtures/fake-mcp.js', path.join(fixture, 'node_modules/@playwright/mcp/cli.js'));
+  copy('tests/fixtures/fake-mcp.js', path.join(fixture, 'node_modules/@playwright/mcp/cli.js'));
 
   const launcher = path.join(fixture, 'src/launch.ts');
   const source = fs.readFileSync(launcher, 'utf8');
-  const shortened = source.replace('const IDLE_MS = 300_000;', 'const IDLE_MS = 100;');
+  const shortened = source
+    .replace('const IDLE_MS = 300_000;', 'const IDLE_MS = 100;')
+    .replace('const TERMINATE_AFTER_MS = 1000;', 'const TERMINATE_AFTER_MS = 50;')
+    .replace('const KILL_AFTER_MS = 2000;', 'const KILL_AFTER_MS = 100;');
   assert.notEqual(shortened, source, 'launcher must declare the five-minute lease');
   fs.writeFileSync(launcher, shortened);
-
-  const supervisor = path.join(fixture, 'src/mcp-session.ts');
-  const supervisorSource = fs.readFileSync(supervisor, 'utf8');
-  fs.writeFileSync(
-    supervisor,
-    supervisorSource
-      .replace('const TERMINATE_AFTER_MS = 1000;', 'const TERMINATE_AFTER_MS = 50;')
-      .replace('const KILL_AFTER_MS = 2000;', 'const KILL_AFTER_MS = 100;'),
-  );
 
   const connections = new EventEmitter();
   const cdp = net.createServer((socket) => connections.emit('connection', socket));
@@ -262,25 +257,6 @@ async function initialize(session) {
   session.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
 }
 
-function messageQueue(stream) {
-  const queued = [];
-  const waiting = [];
-  readline.createInterface({ input: stream }).on('line', (line) => {
-    queued.push(JSON.parse(line));
-    for (const wake of waiting.splice(0)) wake();
-  });
-
-  return {
-    async next(matches) {
-      for (;;) {
-        const index = queued.findIndex(matches);
-        if (index !== -1) return queued.splice(index, 1)[0];
-        await new Promise((resolve) => waiting.push(resolve));
-      }
-    },
-  };
-}
-
 async function closesWithin(socket, milliseconds) {
   if (socket.destroyed) return;
   await Promise.race([
@@ -292,13 +268,4 @@ async function closesWithin(socket, milliseconds) {
 async function staysOpenFor(socket, milliseconds) {
   await delay(milliseconds);
   assert.equal(socket.destroyed, false, 'active MCP lost its CDP connection');
-}
-
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-function copyFile(source, target) {
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.copyFileSync(path.join(repo, source), target);
 }

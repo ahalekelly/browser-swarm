@@ -1,13 +1,11 @@
-// The TypeScript launcher must wrap the pinned MCP in the idle supervisor and
-// hand every invocation a distinct output directory.
+// The TypeScript launcher must supervise the pinned MCP directly and hand every
+// invocation a distinct output directory.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 const test = require('node:test');
+const { createLauncherFixture, run } = require('./helpers');
 
-const repo = path.resolve(__dirname, '..');
 const browsers = [
   {
     name: 'chromium',
@@ -16,7 +14,7 @@ const browsers = [
   },
   {
     name: 'firefox',
-    endpoint: ['--endpoint', 'ws://[::1]:9378/browser-swarm'],
+    endpoint: ['--endpoint', 'ws://127.0.0.1:9378/browser-swarm'],
     output: /^\/tmp\/claude\/pwmcp-firefox-\d+$/,
   },
 ];
@@ -29,9 +27,6 @@ for (const browser of browsers) {
 
     for (const args of [first, second]) {
       assert.deepEqual(args.slice(0, -1), [
-        '300000',
-        process.execPath,
-        path.join(fs.realpathSync(fixture), 'node_modules/@playwright/mcp/cli.js'),
         ...browser.endpoint,
         '--isolated',
         '--output-dir',
@@ -76,25 +71,8 @@ test('Claude canary accepts the per-agent stamp', (t) => {
 });
 
 function createFixture(t) {
-  const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'browser-swarm-launcher-')));
+  const fixture = createLauncherFixture();
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
-  const sourceDir = path.join(fixture, 'src');
-  fs.mkdirSync(sourceDir, { recursive: true });
-  fs.copyFileSync(path.join(repo, 'src/launch.ts'), path.join(sourceDir, 'launch.ts'));
-  fs.writeFileSync(path.join(sourceDir, 'daemon.ts'), `
-import { writeFileSync } from 'node:fs';
-export class DaemonError extends Error { exitCode = 1; }
-export async function ensure() {
-  if (process.env.DAEMON_TOUCH_LOG) writeFileSync(process.env.DAEMON_TOUCH_LOG, 'touched');
-}
-export async function firefoxEndpoint() { return 'ws://[::1]:9378/browser-swarm'; }
-`);
-  fs.writeFileSync(path.join(sourceDir, 'mcp-session.ts'), `
-import { writeFileSync } from 'node:fs';
-writeFileSync(process.env.ARG_LOG, JSON.stringify(process.argv.slice(2)));
-`);
-  fs.mkdirSync(path.join(fixture, 'node_modules/@playwright/mcp'), { recursive: true });
-  fs.writeFileSync(path.join(fixture, 'node_modules/@playwright/mcp/cli.js'), '');
   return fixture;
 }
 
@@ -105,8 +83,7 @@ function launch(fixture, browser, argumentLog) {
 }
 
 function runLaunch(fixture, browser, argumentLog, extraEnv) {
-  return spawnSync(process.execPath, [path.join(fixture, 'src/launch.ts'), browser], {
-    encoding: 'utf8',
+  return run(process.execPath, [path.join(fixture, 'src/launch.ts'), browser], {
     env: { ...process.env, ARG_LOG: argumentLog, ...extraEnv },
   });
 }

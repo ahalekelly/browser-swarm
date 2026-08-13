@@ -1,33 +1,26 @@
 #!/bin/bash
-# Generate the Chromium and Firefox BrowserSwarm agent definitions, splicing
-# the shared system prompt into both templates.
+# Generate both BrowserSwarm agent definitions from the shared template.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 NODE="$(command -v node)"
 AGENTS="$HOME/.claude/agents"
-DESCRIPTION="Headless-browser swarm agent for background web automation (lookups, extractions, form-driven flows). Owns a private isolated context in one shared fingerprint-Chromium process. Each context uses about 100–200 MB with the 2-tab cap; keep fan-outs to about 10 concurrent agents. The daemon auto-starts, and the first agent after a crash reports it and asks to be relaunched. Sessions idle for 5 minutes are reaped; relaunch when browser work resumes."
+CHROMIUM_DESCRIPTION="Headless-browser swarm agent for background web automation (lookups, extractions, form-driven flows). Owns a private isolated context in one shared fingerprint-Chromium process. Each context uses about 100–200 MB with the 2-tab cap; keep fan-outs to about 10 concurrent agents. The daemon auto-starts, and the first agent after a crash reports it and asks to be relaunched. Sessions idle for 5 minutes are reaped; relaunch when browser work resumes."
+FIREFOX_DESCRIPTION="Headless-Firefox swarm agent for sites where Chromium is blocked but Firefox renders (Akamai, notably). Owns a cheap isolated context on one shared Firefox process. Use plain browser-swarm unless the site is confirmed to block Chromium. Sessions idle for 5 minutes are reaped; relaunch when browser work resumes."
+TEMPLATE="$DIR/claude-agents/browser-swarm.template.md"
 
 mkdir -p "$AGENTS"
-node - "$AGENTS" <<'NODE'
-const { readdirSync, unlinkSync } = require('node:fs');
-const { join } = require('node:path');
-const [agents] = process.argv.slice(2);
-for (const name of readdirSync(agents)) {
-  if (/^browser-swarm-\d+\.md$/.test(name)) {
-    unlinkSync(join(agents, name));
-    console.log(`deleted stale ${join(agents, name)}`);
-  }
-}
-NODE
 
 render() {
-  local template="$1" destination="$2"
-  awk -v prompt="$DIR/agent-prompt.md" '$0 == "__PROMPT__" { while ((getline line < prompt) > 0) print line; next } 1' "$template" \
-    | sed -e "s|__DIR__|$DIR|g" -e "s|__NODE__|$NODE|g" -e "s|__DESCRIPTION__|$DESCRIPTION|g" \
+  local name="$1" description="$2" server_name="$3" browser="$4"
+  local destination="$AGENTS/$name.md"
+  awk -v prompt="$DIR/agent-prompt.md" '$0 == "__PROMPT__" { while ((getline line < prompt) > 0) print line; next } 1' "$TEMPLATE" \
+    | sed -e "s|__DIR__|$DIR|g" -e "s|__NODE__|$NODE|g" \
+      -e "s|__NAME__|$name|g" -e "s|__DESCRIPTION__|$description|g" \
+      -e "s|__SERVER_NAME__|$server_name|g" -e "s|__BROWSER__|$browser|g" \
     > "$destination"
   echo "wrote $destination"
 }
 
-render "$DIR/claude-agents/browser-swarm.template.md" "$AGENTS/browser-swarm.md"
-render "$DIR/claude-agents/browser-swarm-firefox.template.md" "$AGENTS/browser-swarm-firefox.md"
+render browser-swarm "$CHROMIUM_DESCRIPTION" playwright chromium
+render browser-swarm-firefox "$FIREFOX_DESCRIPTION" firefox firefox

@@ -2,12 +2,12 @@ node_modules/
 *.log
 .DS_Store
 fingerprint-chromium/
-fingerprint-browser-profile/
+chromium-browser-profile/
+chromium-browser.log
+chromium-daemon-state
 fingerprint-seed
-daemon-state
 firefox-browser-profile/
 firefox-browser.log
 firefox-daemon-state
-firefox-ws-endpoint
 .playwright-mcp/
 .claude/

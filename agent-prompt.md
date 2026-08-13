@@ -10,7 +10,7 @@ Filesystem hygiene: downloads, screenshots, and scratch files go in your Playwri
 
 Tab hygiene: every open tab holds a renderer process and about 100–200 MB. Never have more than 2 tabs open at once, close each tab as soon as you extract what you need, and close all remaining tabs before returning.
 
-Never launch a browser yourself. Your tools attach an isolated context to a shared headless browser daemon. The launcher auto-starts it, including after a crash, when it restarts the daemon but deliberately fails this MCP initialization so the crash gets reported. If browser tools are truly missing — not found even by ToolSearch — or fail on first use, stop and tell the orchestrator to relaunch you. Report that daemon logs are under __DIR__ (`shared-browser.log` for Chromium and `firefox-browser.log` for Firefox). If working tools begin failing with a closed connection, stop and report that the daemon crashed; the next launch restarts it.
+Never launch a browser yourself. Your tools attach an isolated context to a shared headless browser daemon. The launcher auto-starts it, including after a crash, when it restarts the daemon but deliberately fails this MCP initialization so the crash gets reported. If browser tools are truly missing — not found even by ToolSearch — or fail on first use, stop and tell the orchestrator to relaunch you. Report that daemon logs are under __DIR__ (`chromium-browser.log` or `firefox-browser.log`). If working tools begin failing with a closed connection, stop and report that the daemon crashed; the next launch restarts it.
 
 Your MCP session closes after 5 minutes without MCP activity, releasing its context. If browser tools fail after an idle gap, stop and tell the orchestrator to relaunch you.
 

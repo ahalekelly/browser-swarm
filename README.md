@@ -38,7 +38,7 @@ Agents start the required daemon automatically. Operators can inspect either bac
 ./swarm stop firefox
 ```
 
-Chromium MCP clients attach with `--cdp-endpoint http://localhost:9377 --isolated`. Firefox clients attach with `--endpoint <reported-ws-endpoint> --isolated`; `src/launch.ts` reads the endpoint that `firefox.launchServer()` wrote to `firefox-ws-endpoint` and uses it verbatim, including its IPv6 loopback host.
+Chromium MCP clients attach with `--cdp-endpoint http://localhost:9377 --isolated`. Firefox clients attach with `--endpoint ws://127.0.0.1:9378/browser-swarm --isolated`.
 
 `--isolated` is mandatory. Without it, clients share a default context and fight over tabs.
 
@@ -61,7 +61,7 @@ npm run test:firefox
 - `browser-swarm`: fingerprint-Chromium for normal browser work.
 - `browser-swarm-firefox`: Firefox for sites confirmed to block Chromium.
 
-The installer deletes stale numbered `browser-swarm-*.md` definitions. One Claude definition can run concurrently because the local [`mcp-per-subagent`](https://github.com/ahalekelly/claude-patching) patch gives every subagent its own MCP server process. `src/launch.ts` checks the patch canary before touching a daemon; an unpatched Claude Code session fails loudly rather than sharing one browser session. [The bug record](docs/claude-code-mcp-dedup.md) explains why.
+One Claude definition can run concurrently because the local [`mcp-per-subagent`](https://github.com/ahalekelly/claude-patching) patch gives every subagent its own MCP server process. `src/launch.ts` checks the patch canary before touching a daemon; an unpatched Claude Code session fails rather than sharing one browser session. [The bug record](docs/claude-code-mcp-dedup.md) explains why.
 
 [`codex-agents/`](codex-agents/) generates one reusable `browser-swarm` definition. The canary only applies when `CLAUDECODE=1`, so Codex launches pass unchanged.
 
@@ -77,17 +77,17 @@ Both agent families splice their operating prompt from [agent-prompt.md](agent-p
 
 **Relaunch after an idle disconnect.** An initialized MCP session closes after five minutes without activity. An in-flight request suspends its lease. A fresh agent gets a fresh isolated context.
 
-**Do not stop a daemon after a fan-out.** Another session may still use it, so `stop` refuses while clients are attached (`--force` overrides). The watchdog stops it after ten consecutive 30-second polls with no attached clients.
+**Do not stop a daemon after a fan-out.** Another session may still use it, so `stop` refuses while clients are attached (`--force` overrides). Its supervisor stops it after ten consecutive 30-second polls with no clients.
 
 ## How it works
 
-**One lifecycle, two backends.** `src/daemon.ts` parameterizes ownership, crash state, watchdogs, and detached spawning. Chromium runs fingerprint-Chromium on CDP port 9377 under `taskpolicy -c utility`. Firefox runs Playwright's managed build through plain `firefox.launchServer()` on port 9378 with a fixed WebSocket path. Plain `launchServer` is load-bearing: shared-browser mode disables per-client context isolation.
+**One lifecycle, two backends.** One detached `serve` supervisor per backend owns crash state and idle shutdown. Chromium's supervisor runs bare fingerprint-Chromium on CDP port 9377 under `taskpolicy -c utility`. Firefox's supervisor runs Playwright's managed build through plain `firefox.launchServer()` at `ws://127.0.0.1:9378/browser-swarm`. Plain `launchServer` is load-bearing: shared-browser mode disables per-client context isolation.
 
 **Port-derived ownership.** The listener is ours only when it holds files open inside the backend's profile dir. Concurrent starts converge on one daemon. A foreign listener is a hard error, and `stop` refuses to kill it. Port 9377 avoids CDP's common 9222 default. The check reads `lsof`'s file tables rather than the process's command line because agent sandboxes commonly block `ps` while allowing `lsof`; without that, a sandboxed shell would misread our own daemon as foreign. Verbs that must write beside the daemon — a cold `start`, `stop` — still need an unsandboxed shell and say so when the sandbox denies the write; the blind-fire `start` against an already-running daemon works from anywhere.
 
-**Crash-aware auto-start.** A boot-scoped state marker says `running` while a daemon is live and `clean` after deliberate shutdown. The first attachment after an unclean death restarts the daemon but deliberately fails that agent's MCP initialization, ensuring the crash gets reported. Relaunching attaches normally. Browsers and watchdogs run in detached sessions, so cleanup of the sacrificed launcher cannot kill the recovered daemon.
+**Crash-aware auto-start.** Boot-scoped `chromium-daemon-state` and `firefox-daemon-state` markers say `running` while a daemon is live and `clean` after deliberate shutdown. The first attachment after an unclean death restarts the daemon but deliberately fails that agent's MCP initialization. Relaunching attaches normally. Detached supervisors survive cleanup of the sacrificed launcher.
 
-**Idle cleanup.** `src/mcp-session.ts` begins its lease after the MCP initialize handshake, renews it on protocol activity, and suspends it during requests. Expiry closes that MCP and its isolated context. The daemon watchdog counts established client connections and stops its browser after five idle minutes.
+**Idle cleanup.** `src/launch.ts` begins its lease after the MCP initialize handshake, renews it on protocol activity, and suspends it during requests. Expiry closes that MCP and its isolated context. Each `serve` supervisor counts established clients and stops its browser after five idle minutes.
 
 **Stable Chromium fingerprint.** One random fingerprint seed persists across Chromium restarts. All contexts on the daemon present the same device identity. Firefox has no fingerprint modifications; it is the fallback engine.
 

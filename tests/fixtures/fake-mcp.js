@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // Stand-in for the pinned Playwright MCP in supervisor tests: speaks just
-// enough newline-delimited JSON-RPC to exercise mcp-session.ts, and models
-// the CDP connection as one TCP socket to FAKE_CDP_PORT held for the process
-// lifetime — exactly how the real MCP holds its browser attachment.
+// enough newline-delimited JSON-RPC to exercise launch.ts, and models the CDP
+// connection as one TCP socket to FAKE_CDP_PORT held for the process lifetime.
+const fs = require('node:fs');
 const net = require('node:net');
 const readline = require('node:readline');
+
+if (process.env.ARG_LOG) fs.writeFileSync(process.env.ARG_LOG, JSON.stringify(process.argv.slice(2)));
 
 let cdp;
 const nonMessages = [];

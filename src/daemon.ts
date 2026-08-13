@@ -1,6 +1,6 @@
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -9,12 +9,11 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DAEMON_PATH = fileURLToPath(import.meta.url);
 const IDLE_POLL_MS = 30_000;
 const IDLE_POLLS = 10;
-const FIREFOX_WS_PATH = '/browser-swarm';
+const FIREFOX_ENDPOINT = 'ws://127.0.0.1:9378/browser-swarm';
 
 export type BrowserName = 'chromium' | 'firefox';
 
-type Backend = {
-  key: 'chromium-cdp' | 'firefox-ws';
+export type Backend = {
   browserName: BrowserName;
   displayName: string;
   protocolName: string;
@@ -22,12 +21,7 @@ type Backend = {
   profile: string;
   log: string;
   stateFile: string;
-  endpointFile?: string;
-};
-
-type Reporter = {
-  out(message: string): void;
-  error(message: string): void;
+  clientEndpoint: string;
 };
 
 export class DaemonError extends Error {
@@ -39,73 +33,48 @@ export class DaemonError extends Error {
   }
 }
 
-const defaultReporter: Reporter = {
-  out: (message) => console.log(message),
-  error: (message) => console.error(message),
-};
-
-export function getBackend(name: BrowserName): Backend {
-  if (name === 'chromium') {
-    const profile = join(ROOT, 'fingerprint-browser-profile');
-    return {
-      key: 'chromium-cdp',
-      browserName: 'chromium',
-      displayName: 'shared Chromium browser',
-      protocolName: 'CDP browser',
-      port: 9377,
-      profile,
-      log: join(ROOT, 'shared-browser.log'),
-      stateFile: join(ROOT, 'daemon-state'),
-    };
-  }
-  if (name === 'firefox') {
-    const profile = join(ROOT, 'firefox-browser-profile');
-    return {
-      key: 'firefox-ws',
-      browserName: 'firefox',
-      displayName: 'shared Firefox browser',
-      protocolName: 'Firefox WebSocket server',
-      port: 9378,
-      profile,
-      log: join(ROOT, 'firefox-browser.log'),
-      stateFile: join(ROOT, 'firefox-daemon-state'),
-      endpointFile: join(ROOT, 'firefox-ws-endpoint'),
-    };
-  }
-  throw new DaemonError(`unknown browser: ${name}`, 2);
+export function getBackend(browserName: BrowserName): Backend {
+  const firefox = browserName === 'firefox';
+  const port = firefox ? 9378 : 9377;
+  return {
+    browserName,
+    displayName: `shared ${firefox ? 'Firefox' : 'Chromium'} browser`,
+    protocolName: firefox ? 'Firefox WebSocket server' : 'CDP browser',
+    port,
+    profile: join(ROOT, `${browserName}-browser-profile`),
+    log: join(ROOT, `${browserName}-browser.log`),
+    stateFile: join(ROOT, `${browserName}-daemon-state`),
+    clientEndpoint: firefox ? FIREFOX_ENDPOINT : `http://localhost:${port}`,
+  };
 }
 
-export async function ensure(name: BrowserName, reporter = defaultReporter): Promise<void> {
-  const backend = getBackend(name);
+export async function ensure(browserName: BrowserName): Promise<void> {
+  const backend = getBackend(browserName);
   if (!(await ready(backend)) && ownerPid(backend) === undefined && crashed(backend)) {
-    await start(backend, reporter);
+    await start(backend);
     throw new DaemonError(`${backend.displayName} crashed since its last clean shutdown (see ${backend.log}) — it has been restarted, but this agent's MCP is deliberately failed so the crash gets reported. Relaunch the agent to attach normally.`);
   }
-  await start(backend, reporter);
+  await start(backend);
 }
 
-export async function firefoxEndpoint(): Promise<string> {
-  const backend = getBackend('firefox');
-  if (!(await ready(backend))) {
-    throw new DaemonError(`Firefox endpoint is unavailable: ${backend.endpointFile} is missing or port ${backend.port} is closed`);
-  }
-  return readFileSync(backend.endpointFile, 'utf8').trim();
+export function firefoxEndpoint(): string {
+  return FIREFOX_ENDPOINT;
 }
 
-async function start(backend: Backend, reporter: Reporter): Promise<void> {
-  if (await ready(backend)) return useRunningDaemon(backend, reporter, true);
+async function start(backend: Backend): Promise<void> {
+  if (await ready(backend)) return useRunningDaemon(backend, true);
 
   const startingOwner = ownerPid(backend);
   if (startingOwner !== undefined) {
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (await ready(backend)) return useRunningDaemon(backend, reporter, true);
+      if (await ready(backend)) return useRunningDaemon(backend, true);
       await delay(500);
     }
     throw new DaemonError(`${backend.displayName} owns port ${backend.port} but did not become ready within 10s; last log lines:\n${lastLogLines(backend.log)}`);
   }
 
   if (hasListener(backend.port)) {
-    if (backend.key === 'chromium-cdp') {
+    if (backend.browserName === 'chromium') {
       throw new DaemonError(`port ${backend.port} is taken by a non-CDP process:\n${listenerDetails(backend.port)}`);
     }
     throw new DaemonError(`a foreign process is serving port ${backend.port} — refusing to share it (see: lsof -i :${backend.port})`);
@@ -115,11 +84,12 @@ async function start(backend: Backend, reporter: Reporter): Promise<void> {
     throw new DaemonError(`this shell cannot write to ${ROOT} (sandboxed?) — start the daemon from an unsandboxed shell, or let an agent's MCP launcher start it`);
   }
 
-  if (crashed(backend)) reporter.error(`warning: previous ${backend.displayName} instance shut down uncleanly (crashed or killed) — see ${backend.log}`);
-  await spawnBackend(backend);
+  await prepareBackend(backend);
+  if (crashed(backend)) console.error(`warning: previous ${backend.displayName} instance shut down uncleanly (crashed or killed) — see ${backend.log}`);
+  spawnDetached(backend.log, process.execPath, [DAEMON_PATH, 'serve', backend.browserName]);
 
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (await ready(backend)) return useRunningDaemon(backend, reporter, false);
+    if (await ready(backend) && markerIsRunning(backend)) return useRunningDaemon(backend, false);
     const owner = ownerPid(backend);
     if (hasListener(backend.port) && owner === undefined) {
       throw new DaemonError(`lost port ${backend.port} to a foreign ${backend.protocolName} while starting (see: lsof -i :${backend.port})`);
@@ -130,36 +100,25 @@ async function start(backend: Backend, reporter: Reporter): Promise<void> {
   throw new DaemonError(`${backend.displayName} did not answer on port ${backend.port} within 10s; last log lines:\n${lastLogLines(backend.log)}`);
 }
 
-function useRunningDaemon(backend: Backend, reporter: Reporter, alreadyUp: boolean): void {
+function useRunningDaemon(backend: Backend, alreadyUp: boolean): void {
   const owner = ownerPid(backend);
   if (owner === undefined) {
     throw new DaemonError(`a foreign ${backend.protocolName} is serving port ${backend.port} — refusing to share it (see: lsof -i :${backend.port})`);
   }
-  // A sandboxed shell cannot refresh the state marker or spawn a watchdog, but
-  // the unsandboxed start that brought the daemon up already did both.
-  if (canWrite(backend)) {
-    markRunning(backend);
-    spawnWatchdog(backend, owner);
-  }
-  reporter.out(`${backend.displayName} ${alreadyUp ? 'already up' : 'up'}: pid ${owner}, ${connectionLabel(backend)}`);
+  console.error(`${backend.displayName} ${alreadyUp ? 'already up' : 'up'}: pid ${owner}, ${connectionLabel(backend)}`);
 }
 
-async function spawnBackend(backend: Backend): Promise<void> {
+async function prepareBackend(backend: Backend): Promise<void> {
   mkdirSync(backend.profile, { recursive: true });
-  if (backend.key === 'firefox-ws') {
+  if (backend.browserName === 'firefox') {
     const { firefox } = await import('playwright-core');
-    const binary = firefox.executablePath();
-    if (!isExecutable(binary)) {
+    if (!isExecutable(firefox.executablePath())) {
       throw new DaemonError(`Playwright Firefox is not installed (run ${join(ROOT, 'install-playwright-firefox.sh')})`);
     }
-    // A stale endpoint file would satisfy ready() as soon as the new server
-    // binds the port, handing clients the previous server's endpoint.
-    rmSync(backend.endpointFile, { force: true });
-    spawnDetached(backend.log, process.execPath, [DAEMON_PATH, 'serve', 'firefox']);
     return;
   }
 
-  const binary = join(ROOT, 'fingerprint-chromium/Chromium.app/Contents/MacOS/Chromium');
+  const binary = chromiumBinary();
   if (!isExecutable(binary)) {
     throw new DaemonError(`fingerprint-chromium is not installed (run ${join(ROOT, 'install-fingerprint-chromium.sh')})`);
   }
@@ -167,50 +126,108 @@ async function spawnBackend(backend: Backend): Promise<void> {
   if (!existsSync(seedFile) || readFileSync(seedFile).length === 0) {
     writeFileSync(seedFile, `${randomBytes(4).readUInt32LE() % 100_000_000}\n`);
   }
-  const fingerprint = readFileSync(seedFile, 'utf8').trim();
-  spawnDetached(backend.log, 'taskpolicy', [
-    '-c', 'utility', binary,
-    '--headless',
-    `--fingerprint=${fingerprint}`,
-    '--fingerprint-platform=macos',
-    '--fingerprint-brand=Chrome',
-    `--remote-debugging-port=${backend.port}`,
-    `--user-data-dir=${backend.profile}`,
-    '--no-first-run',
-  ]);
 }
 
-async function serveFirefox(backend: Backend): Promise<void> {
-  // Held open for this process's lifetime, since launchServer keeps its own
-  // temporary profile: ownership is derived from the listener's open files
-  // under the backend's profile dir.
-  openSync(join(backend.profile, 'daemon-lock'), 'w');
-  const { firefox } = await import('playwright-core');
-  const server = await firefox.launchServer({ headless: true, port: backend.port, wsPath: FIREFOX_WS_PATH });
-  writeFileSync(backend.endpointFile, `${server.wsEndpoint()}\n`);
+async function serve(backend: Backend): Promise<void> {
+  mkdirSync(backend.profile, { recursive: true });
+  let child: ChildProcess | undefined;
+  let server;
+  let closed: Promise<void>;
+  let shuttingDown = false;
 
-  let closing = false;
-  const close = () => {
-    if (closing) return;
-    closing = true;
-    void server.close();
+  if (backend.browserName === 'chromium') {
+    const fingerprint = readFileSync(join(ROOT, 'fingerprint-seed'), 'utf8').trim();
+    child = spawn('taskpolicy', [
+      '-c', 'utility', chromiumBinary(),
+      '--headless',
+      `--fingerprint=${fingerprint}`,
+      '--fingerprint-platform=macos',
+      '--fingerprint-brand=Chrome',
+      `--remote-debugging-port=${backend.port}`,
+      `--user-data-dir=${backend.profile}`,
+      '--no-first-run',
+    ], { stdio: 'inherit' });
+    closed = new Promise((resolveClose) => child.once('close', () => resolveClose()));
+  } else {
+    // launchServer uses a temporary browser profile. This open file makes the
+    // listener owner identifiable through lsof without inspecting processes.
+    openSync(join(backend.profile, 'daemon-lock'), 'w');
+    const { firefox } = await import('playwright-core');
+    server = await firefox.launchServer({
+      headless: true,
+      host: '127.0.0.1',
+      port: backend.port,
+      wsPath: '/browser-swarm',
+    });
+    closed = new Promise((resolveClose) => server.on('close', resolveClose));
+    if (server.wsEndpoint() !== backend.clientEndpoint) {
+      await server.close();
+      throw new Error(`Firefox endpoint mismatch: expected ${backend.clientEndpoint}, got ${server.wsEndpoint()}`);
+    }
+  }
+
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    if (child) {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+    } else {
+      await server.close();
+    }
   };
-  process.on('SIGINT', close);
-  process.on('SIGTERM', close);
-  await new Promise((resolveClose) => server.on('close', resolveClose));
+  process.once('SIGINT', () => { void shutdown(); });
+  process.once('SIGTERM', () => { void shutdown(); });
+
+  const expectedOwner = child?.pid ?? process.pid;
+  let listenerPid: number | undefined;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (shuttingDown) return;
+    if (await Promise.race([closed.then(() => true), delay(0).then(() => false)])) return;
+    if (await ready(backend)) {
+      listenerPid = ownerPid(backend);
+      if (listenerPid === expectedOwner) break;
+      if (listenerPid !== undefined) {
+        await shutdown();
+        throw new Error(`${backend.displayName} lost its startup race to pid ${listenerPid}`);
+      }
+    }
+    await delay(500);
+  }
+  if (listenerPid !== expectedOwner) {
+    await shutdown();
+    throw new Error(`${backend.displayName} did not establish ownership of port ${backend.port} within 10s`);
+  }
+
+  markRunning(backend);
+  console.error(`${timestamp()} serve: watching ${backend.browserName} listener pid ${listenerPid}`);
+  let idlePolls = 0;
+  for (;;) {
+    const event = await Promise.race([closed.then(() => 'closed'), delay(IDLE_POLL_MS).then(() => 'poll')]);
+    if (event === 'closed' || shuttingDown) return;
+    if (ownerPid(backend) !== listenerPid) {
+      await shutdown();
+      return;
+    }
+    idlePolls = clientCount(backend, listenerPid) === 0 ? idlePolls + 1 : 0;
+    if (idlePolls < IDLE_POLLS) continue;
+    console.error(`${timestamp()} serve: no attached clients for ${(IDLE_POLL_MS * IDLE_POLLS) / 1000}s, stopping ${backend.browserName} listener pid ${listenerPid}`);
+    markClean(backend);
+    await shutdown();
+    return;
+  }
 }
 
-async function stop(backend: Backend, reporter: Reporter, force: boolean): Promise<void> {
+async function stop(backend: Backend, force: boolean): Promise<void> {
   const owner = ownerPid(backend);
   if (owner === undefined) {
     if (await ready(backend) || hasListener(backend.port)) {
       throw new DaemonError(`the ${backend.protocolName} on port ${backend.port} is not ours — refusing to kill it (see: lsof -i :${backend.port})`);
     }
     if (crashed(backend) && canWrite(backend)) {
-      reporter.out('note: previous instance shut down uncleanly — clearing crash state');
+      console.error('note: previous instance shut down uncleanly — clearing crash state');
       markClean(backend);
     }
-    reporter.out(`${backend.displayName} already stopped`);
+    console.error(`${backend.displayName} already stopped`);
     return;
   }
 
@@ -218,7 +235,6 @@ async function stop(backend: Backend, reporter: Reporter, force: boolean): Promi
   if (clients > 0 && !force) {
     throw new DaemonError(`${clients} attached client${clients === 1 ? '' : 's'} — refusing to stop the machine-wide ${backend.displayName} (it stops itself after ${(IDLE_POLL_MS * IDLE_POLLS) / 1000}s with no clients; pass --force to override)`);
   }
-
   if (!canWrite(backend)) {
     throw new DaemonError(`this shell cannot write to ${ROOT} (sandboxed?) — run \`swarm stop ${backend.browserName}\` from an unsandboxed shell`);
   }
@@ -227,7 +243,7 @@ async function stop(backend: Backend, reporter: Reporter, force: boolean): Promi
   process.kill(owner);
   for (let attempt = 0; attempt < 20; attempt += 1) {
     if (!processExists(owner)) {
-      reporter.out(`${backend.displayName} stopped`);
+      console.error(`${backend.displayName} stopped`);
       return;
     }
     await delay(500);
@@ -235,68 +251,36 @@ async function stop(backend: Backend, reporter: Reporter, force: boolean): Promi
   throw new DaemonError(`pid ${owner} still alive after 10s`);
 }
 
-async function status(backend: Backend, reporter: Reporter): Promise<number> {
+async function status(backend: Backend): Promise<number> {
   const owner = ownerPid(backend);
   if (owner === undefined) {
     if (await ready(backend) || hasListener(backend.port)) {
-      reporter.out(`foreign ${backend.protocolName} on port ${backend.port} (not started by BrowserSwarm):\n${listenerDetails(backend.port)}`);
+      console.error(`foreign ${backend.protocolName} on port ${backend.port} (not started by BrowserSwarm):\n${listenerDetails(backend.port)}`);
     } else {
-      reporter.out(`not running (port ${backend.port} closed)`);
-      if (crashed(backend)) reporter.out(`last shutdown: unclean — daemon crashed or was killed (the next agent attach restarts it and reports the crash; \`swarm start ${backend.browserName}\` clears the state now)`);
+      console.error(`not running (port ${backend.port} closed)`);
+      if (crashed(backend)) console.error(`last shutdown: unclean — daemon crashed or was killed (the next agent attach restarts it and reports the crash; \`swarm start ${backend.browserName}\` clears the state now)`);
     }
     return 1;
   }
 
-  reporter.out(`pid: ${owner}`);
-  const watchdogPid = findWatchdog(backend, owner);
-  if (watchdogPid !== undefined) {
-    reporter.out(`watchdog: pid ${watchdogPid} (auto-stop after ${(IDLE_POLL_MS * IDLE_POLLS) / 1000}s with no attached clients)`);
-  } else if (canListProcesses()) {
-    reporter.out('watchdog: not running — browser will not auto-stop');
-  } else {
-    reporter.out('watchdog: unknown — this sandboxed shell cannot list processes');
-  }
-  reporter.out(`attached clients: ${clientCount(backend, owner)}`);
-
-  if (backend.key === 'firefox-ws') {
-    reporter.out(`endpoint: ${await firefoxEndpoint()}`);
+  console.error(`pid: ${owner}`);
+  console.error(`attached clients: ${clientCount(backend, owner)}`);
+  if (backend.browserName === 'firefox') {
+    console.error(`endpoint: ${backend.clientEndpoint}`);
     return 0;
   }
 
   const { chromium } = await import('playwright-core');
-  const browser = await chromium.connectOverCDP(`http://localhost:${backend.port}`, { timeout: 5000 });
+  const browser = await chromium.connectOverCDP(backend.clientEndpoint, { timeout: 5000 });
   const contexts = browser.contexts();
-  reporter.out(`contexts: ${contexts.length}`);
-  for (const context of contexts) reporter.out(`  pages: ${context.pages().map((page) => page.url()).join(', ') || '(none)'}`);
+  console.error(`contexts: ${contexts.length}`);
+  for (const context of contexts) console.error(`  pages: ${context.pages().map((page) => page.url()).join(', ') || '(none)'}`);
   await browser.close();
   return 0;
 }
 
-async function watchdog(backend: Backend, browserPid: number, reporter: Reporter): Promise<void> {
-  let idlePolls = 0;
-  reporter.out(`${timestamp()} watchdog: watching browser pid ${browserPid}`);
-  for (;;) {
-    await delay(IDLE_POLL_MS);
-    if (ownerPid(backend) !== browserPid) return;
-    idlePolls = clientCount(backend, browserPid) === 0 ? idlePolls + 1 : 0;
-    if (idlePolls < IDLE_POLLS) continue;
-    reporter.out(`${timestamp()} watchdog: no attached clients for ${(IDLE_POLL_MS * IDLE_POLLS) / 1000}s, stopping browser pid ${browserPid}`);
-    markClean(backend);
-    try {
-      process.kill(browserPid);
-    } catch (error) {
-      if (error.code !== 'ESRCH') throw error;
-    }
-    return;
-  }
-}
-
 async function ready(backend: Backend): Promise<boolean> {
-  if (backend.key === 'firefox-ws') {
-    return existsSync(backend.endpointFile)
-      && readFileSync(backend.endpointFile, 'utf8').trim().length > 0
-      && await portOpen(backend.port);
-  }
+  if (backend.browserName === 'firefox') return portOpen(backend.port);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2000);
   try {
@@ -311,7 +295,7 @@ async function ready(backend: Backend): Promise<boolean> {
 
 function portOpen(port: number): Promise<boolean> {
   return new Promise((resolveOpen) => {
-    const socket = createConnection(port, 'localhost');
+    const socket = createConnection(port, '127.0.0.1');
     const finish = (open: boolean) => {
       socket.destroy();
       resolveOpen(open);
@@ -323,28 +307,20 @@ function portOpen(port: number): Promise<boolean> {
 }
 
 function connectionLabel(backend: Backend): string {
-  return backend.key === 'chromium-cdp'
-    ? `CDP http://localhost:${backend.port}`
-    : `WebSocket ${readFileSync(backend.endpointFile, 'utf8').trim()}`;
+  return backend.browserName === 'chromium'
+    ? `CDP ${backend.clientEndpoint}`
+    : `WebSocket ${backend.clientEndpoint}`;
 }
 
-// Pid of the listener on the backend's port that we started: it holds files
-// inside our profile dir open, as any browser does with its profile. Undefined
-// when the port is free or held by a foreign process. Open files (lsof) rather
-// than the command line (ps): agent sandboxes block process inspection but not
-// lsof's file tables, so ownership stays decidable from a sandboxed shell.
+// The listener is ours when it holds a file inside our profile dir open. Use
+// lsof's file tables because agent sandboxes commonly block ps but allow lsof.
 function ownerPid(backend: Backend): number | undefined {
   for (const pid of listenerPids(backend.port)) {
-    // A real Chromium holds hundreds of files open; a read truncated at the
-    // default buffer cap would misreport our own daemon as foreign.
     const result = spawnSync('lsof', ['-p', String(pid)], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
     if (result.status === 0 && result.stdout.includes(`${backend.profile}/`)) return pid;
   }
 }
 
-// True when this shell may write beside the daemon, where its state marker,
-// log, and profile all live. Agent sandboxes typically deny these writes while
-// allowing everything the read paths need.
 function canWrite(backend: Backend): boolean {
   try {
     closeSync(openSync(backend.stateFile, 'a'));
@@ -352,12 +328,6 @@ function canWrite(backend: Backend): boolean {
   } catch {
     return false;
   }
-}
-
-// A shell that cannot inspect even its own process is sandboxed, so pgrep's
-// empty answer means "unknown" rather than "not running".
-function canListProcesses(): boolean {
-  return spawnSync('ps', ['-p', String(process.pid)]).status === 0;
 }
 
 function clientCount(backend: Backend, owner: number): number {
@@ -397,28 +367,24 @@ function markClean(backend: Backend): void {
   writeFileSync(backend.stateFile, 'clean\n');
 }
 
+function markerIsRunning(backend: Backend): boolean {
+  return existsSync(backend.stateFile) && readFileSync(backend.stateFile, 'utf8').startsWith('running ');
+}
+
 function crashed(backend: Backend): boolean {
   if (!existsSync(backend.stateFile)) return false;
   const [state, boot] = readFileSync(backend.stateFile, 'utf8').trim().split(/\s+/);
   return state === 'running' && boot === bootEpoch();
 }
 
+function chromiumBinary(): string {
+  return join(ROOT, 'fingerprint-chromium/Chromium.app/Contents/MacOS/Chromium');
+}
+
 function spawnDetached(logPath: string, command: string, args: string[]): void {
   const log = openSync(logPath, 'a');
   spawn(command, args, { detached: true, stdio: ['ignore', log, log] }).unref();
   closeSync(log);
-}
-
-function spawnWatchdog(backend: Backend, owner: number): void {
-  if (findWatchdog(backend, owner) !== undefined) return;
-  spawnDetached(backend.log, process.execPath, [DAEMON_PATH, 'watchdog', backend.browserName, String(owner)]);
-}
-
-function findWatchdog(backend: Backend, owner: number): number | undefined {
-  const pattern = `${DAEMON_PATH} watchdog ${backend.browserName} ${owner}`;
-  const result = spawnSync('pgrep', ['-f', pattern], { encoding: 'utf8' });
-  if (result.status !== 0) return undefined;
-  return Number(result.stdout.trim().split(/\s+/)[0]);
 }
 
 function isExecutable(path: string): boolean {
@@ -451,28 +417,21 @@ function delay(milliseconds: number): Promise<void> {
 async function main(): Promise<void> {
   const rest = process.argv.slice(2);
   const force = rest.includes('--force');
-  const [verb, browser = 'chromium', argument] = rest.filter((arg) => arg !== '--force');
+  const [verb, browser = 'chromium'] = rest.filter((arg) => arg !== '--force');
   if (force && verb !== 'stop') throw new DaemonError('--force only applies to stop', 2);
   if (browser !== 'chromium' && browser !== 'firefox') throw new DaemonError(`unknown browser: ${browser}`, 2);
   const backend = getBackend(browser);
 
-  if (verb === 'start') await start(backend, defaultReporter);
-  else if (verb === 'stop') await stop(backend, defaultReporter, force);
-  else if (verb === 'status') process.exitCode = await status(backend, defaultReporter);
+  if (verb === 'start') await start(backend);
+  else if (verb === 'stop') await stop(backend, force);
+  else if (verb === 'status') process.exitCode = await status(backend);
   else if (verb === 'ensure') await ensure(browser);
-  else if (verb === 'watchdog') {
-    if (!argument || !Number.isSafeInteger(Number(argument))) throw new DaemonError('watchdog needs the browser pid', 2);
-    await watchdog(backend, Number(argument), defaultReporter);
-  } else if (verb === 'serve' && browser === 'firefox') {
-    await serveFirefox(backend);
-  } else {
-    throw new DaemonError('usage: swarm start|stop [--force]|status [chromium|firefox]', 2);
-  }
+  else if (verb === 'serve') await serve(backend);
+  else throw new DaemonError('usage: swarm start|stop [--force]|status [chromium|firefox]', 2);
 }
 
 // Node realpaths the entry module for import.meta.url, so argv must be
-// realpathed too — macOS /var and /tmp are symlinks, and a plain resolve()
-// comparison would make a symlinked invocation silently exit without running.
+// realpathed too when macOS /var and /tmp symlinks are involved.
 if (import.meta.url === pathToFileURL(realpathSync(resolve(process.argv[1]))).href) {
   main().catch((error) => {
     if (error instanceof DaemonError) {
