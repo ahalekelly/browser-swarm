@@ -90,14 +90,21 @@ export const firefox = {
   executablePath: () => ${JSON.stringify(executable)},
   launchServer: ({ host, port, wsPath }) => new Promise((resolve) => {
     const events = new EventEmitter();
-    const listener = createServer(() => {});
+    const sockets = new Set();
+    const listener = createServer((socket) => {
+      sockets.add(socket);
+      socket.on('close', () => sockets.delete(socket));
+    });
     listener.listen(port, host, () => resolve({
       wsEndpoint: () => \`ws://\${host}:\${port}\${wsPath}\`,
       on: events.on.bind(events),
-      close: () => new Promise((closed) => listener.close(() => {
-        events.emit('close');
-        closed();
-      })),
+      close: () => new Promise((closed) => {
+        for (const socket of sockets) socket.destroy();
+        listener.close(() => {
+          events.emit('close');
+          closed();
+        });
+      }),
     }));
   }),
 };

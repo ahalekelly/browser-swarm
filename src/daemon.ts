@@ -90,10 +90,6 @@ async function start(backend: Backend): Promise<void> {
 
   for (let attempt = 0; attempt < 20; attempt += 1) {
     if (await ready(backend) && markerIsRunning(backend)) return useRunningDaemon(backend, false);
-    const owner = ownerPid(backend);
-    if (hasListener(backend.port) && owner === undefined) {
-      throw new DaemonError(`lost port ${backend.port} to a foreign ${backend.protocolName} while starting (see: lsof -i :${backend.port})`);
-    }
     await delay(500);
   }
 
