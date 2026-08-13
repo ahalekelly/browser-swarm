@@ -10,6 +10,15 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DAEMON_PATH = fileURLToPath(import.meta.url);
 const IDLE_POLL_MS = 30_000;
 const IDLE_POLLS = 10;
+// A launcher must answer its MCP client before that client's startup timeout,
+// so it gives up quickly and tells the agent to relaunch. The supervisor has
+// nothing to lose by waiting, and a cold first launch is slow: macOS scans the
+// app bundle, the binary is not in page cache, and utility QoS deprioritises
+// it. Killing a browser that is merely slow costs every later agent too.
+const READY_POLL_MS = 500;
+const LAUNCH_POLLS = 20;
+const SERVE_POLLS = 240;
+const KILL_AFTER_MS = 2000;
 const FIREFOX_ENDPOINT = 'ws://127.0.0.1:9378/browser-swarm';
 
 export type BrowserName = 'chromium' | 'firefox';
@@ -63,11 +72,11 @@ async function start(backend: Backend): Promise<void> {
 
   const startingOwner = ownerPid(backend);
   if (startingOwner !== undefined) {
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    for (let attempt = 0; attempt < LAUNCH_POLLS; attempt += 1) {
       if (await ready(backend)) return useRunningDaemon(backend, true);
-      await delay(500);
+      await delay(READY_POLL_MS);
     }
-    throw new DaemonError(`${backend.displayName} owns port ${backend.port} but did not become ready within 10s; last log lines:\n${lastLogLines(backend.log)}`);
+    throw new DaemonError(`${backend.displayName} owns port ${backend.port} but did not become ready within ${seconds(LAUNCH_POLLS)}; last log lines:\n${lastLogLines(backend.log)}`);
   }
 
   if (hasListener(backend.port)) {
@@ -85,12 +94,12 @@ async function start(backend: Backend): Promise<void> {
   if (crashed(backend)) console.error(`warning: previous ${backend.displayName} instance shut down uncleanly (crashed or killed) — see ${backend.log}`);
   spawnDetached(backend.log, process.execPath, [DAEMON_PATH, 'serve', backend.browserName]);
 
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < LAUNCH_POLLS; attempt += 1) {
     if (await ready(backend) && markerIsRunning(backend)) return useRunningDaemon(backend, false);
-    await delay(500);
+    await delay(READY_POLL_MS);
   }
 
-  throw new DaemonError(`${backend.displayName} did not answer on port ${backend.port} within 10s; last log lines:\n${lastLogLines(backend.log)}`);
+  throw new DaemonError(`${backend.displayName} did not answer on port ${backend.port} within ${seconds(LAUNCH_POLLS)} — its supervisor keeps starting it, so relaunch the agent to attach; last log lines:\n${lastLogLines(backend.log)}`);
 }
 
 function useRunningDaemon(backend: Backend, alreadyUp: boolean): void {
@@ -162,11 +171,15 @@ async function serve(backend: Backend): Promise<void> {
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    if (child) {
-      if (child.exitCode === null && child.signalCode === null) child.kill();
-    } else {
+    if (!child) {
       await server.close();
+      return;
     }
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    // Chromium ignores SIGTERM until it finishes starting, and an unsupervised
+    // browser holding the port would look attachable to every later agent.
+    await Promise.race([closed, delay(KILL_AFTER_MS)]);
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
   };
   const exitOnSignal = () => { void shutdown().then(() => process.exit()); };
   process.once('SIGINT', exitOnSignal);
@@ -174,7 +187,7 @@ async function serve(backend: Backend): Promise<void> {
 
   const expectedOwner = child?.pid ?? process.pid;
   let listenerPid: number | undefined;
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < SERVE_POLLS; attempt += 1) {
     if (shuttingDown) return;
     if (await Promise.race([closed.then(() => true), delay(0).then(() => false)])) {
       throw new Error(`${backend.displayName} exited before establishing ownership of port ${backend.port}`);
@@ -187,11 +200,11 @@ async function serve(backend: Backend): Promise<void> {
         throw new Error(`${backend.displayName} lost its startup race to pid ${listenerPid}`);
       }
     }
-    await delay(500);
+    await delay(READY_POLL_MS);
   }
   if (listenerPid !== expectedOwner) {
     await shutdown();
-    throw new Error(`${backend.displayName} did not establish ownership of port ${backend.port} within 10s`);
+    throw new Error(`${backend.displayName} did not establish ownership of port ${backend.port} within ${seconds(SERVE_POLLS)}`);
   }
 
   markRunning(backend);
@@ -411,6 +424,10 @@ function lastLogLines(path: string): string {
 
 function timestamp(): string {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
+}
+
+function seconds(polls: number): string {
+  return `${(polls * READY_POLL_MS) / 1000}s`;
 }
 
 function delay(milliseconds: number): Promise<void> {

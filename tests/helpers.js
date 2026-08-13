@@ -42,10 +42,10 @@ export function writeExecutable(target, contents) {
   fs.chmodSync(target, 0o755);
 }
 
-export function installFakeChromium(fixture) {
+export function installFakeChromium(fixture, startupMs = 0) {
   writeExecutable(
     path.join(fixture, 'fingerprint-chromium/Chromium.app/Contents/MacOS/Chromium'),
-    `#!/bin/bash\nexec "${process.execPath}" "${repo}/tests/fixtures/fake-browser.js" "$@"\n`,
+    `#!/bin/bash\nexport FAKE_BROWSER_STARTUP_MS=${startupMs}\nexec "${process.execPath}" "${repo}/tests/fixtures/fake-browser.js" "$@"\n`,
   );
 }
 
