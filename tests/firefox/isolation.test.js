@@ -1,14 +1,16 @@
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const http = require('node:http');
-const os = require('node:os');
-const path = require('node:path');
-const { once } = require('node:events');
-const { spawn, spawnSync } = require('node:child_process');
-const test = require('node:test');
-const { messageQueue } = require('../helpers');
+import assert from 'node:assert/strict';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import fs from 'node:fs';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { firefox } from 'playwright-core';
+import { messageQueue } from '../helpers.js';
 
-const repo = path.resolve(__dirname, '../..');
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const daemon = path.join(repo, 'src/daemon.ts');
 const mcp = path.join(repo, 'node_modules/@playwright/mcp/cli.js');
 
@@ -139,7 +141,7 @@ async function waitForClientCount(port, daemonPid, expected) {
 }
 
 function directFirefoxChildren(parentPid) {
-  const executable = require('playwright-core').firefox.executablePath();
+  const executable = firefox.executablePath();
   const result = spawnSync('ps', ['-axo', 'ppid=,command='], { encoding: 'utf8' });
   return result.stdout.split('\n').filter((line) => {
     const match = line.trim().match(/^(\d+)\s+(.*)$/);

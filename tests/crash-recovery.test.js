@@ -1,19 +1,19 @@
 // After a crash, ensure restarts the browser and deliberately fails so the
 // sacrificed agent reports it. The restarted supervisor must survive cleanup
 // of that launcher's process group.
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { spawn, spawnSync } = require('node:child_process');
-const test = require('node:test');
-const {
+import assert from 'node:assert/strict';
+import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import test from 'node:test';
+import {
   delay,
   freePort,
   installFakeChromium,
   runDaemon,
   tempFixture,
   writeDaemonFixture,
-} = require('./helpers');
+} from './helpers.js';
 
 test('a post-crash restart survives the sacrificed launcher process group being killed', async (t) => {
   const fixture = tempFixture('browser-swarm-crash-');

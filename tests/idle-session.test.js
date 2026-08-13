@@ -1,20 +1,20 @@
 // The idle lease through the real TypeScript launcher, with a stub daemon and
 // fake MCP. The lease and shutdown grace are shortened so five minutes becomes
 // about 100ms.
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const net = require('node:net');
-const path = require('node:path');
-const { spawn } = require('node:child_process');
-const { EventEmitter, once } = require('node:events');
-const test = require('node:test');
-const {
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { EventEmitter, once } from 'node:events';
+import fs from 'node:fs';
+import net from 'node:net';
+import path from 'node:path';
+import test from 'node:test';
+import {
   copy,
   delay,
   initializeRequest,
   messageQueue,
   tempFixture,
-} = require('./helpers');
+} from './helpers.js';
 
 test('the launcher drops an attached MCP session after five idle minutes', async (t) => {
   const session = await launchSession(t);

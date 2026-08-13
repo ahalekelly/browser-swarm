@@ -1,13 +1,13 @@
 // Firefox uses the same detached serve lifecycle as Chromium. A fake
 // playwright-core keeps these tests fast while preserving listener ownership,
 // attached-client guards, signals, idle expiry, and marker behavior.
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const net = require('node:net');
-const path = require('node:path');
-const { spawnSync } = require('node:child_process');
-const test = require('node:test');
-const { delay, freePort, runDaemon, tempFixture, writeDaemonFixture } = require('./helpers');
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import net from 'node:net';
+import path from 'node:path';
+import test from 'node:test';
+import { delay, freePort, runDaemon, tempFixture, writeDaemonFixture } from './helpers.js';
 
 test('Firefox starts one owned server at its constant endpoint and stops cleanly', async (t) => {
   const fixture = await firefoxFixture(t);

@@ -1,14 +1,15 @@
-const fs = require('node:fs');
-const net = require('node:net');
-const os = require('node:os');
-const path = require('node:path');
-const readline = require('node:readline');
-const { spawn, spawnSync } = require('node:child_process');
+import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
 
-const repo = path.resolve(__dirname, '..');
-const initializeRequest = { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} };
+export const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export const initializeRequest = { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} };
 
-function freePort(host = '127.0.0.1') {
+export function freePort(host = '127.0.0.1') {
   return new Promise((resolve) => {
     const server = net.createServer();
     server.listen(0, host, () => {
@@ -18,37 +19,37 @@ function freePort(host = '127.0.0.1') {
   });
 }
 
-function run(command, args, options = {}) {
+export function run(command, args, options = {}) {
   return spawnSync(command, args, { encoding: 'utf8', ...options });
 }
 
-function runDaemon(daemon, verb, browser = 'chromium', ...flags) {
+export function runDaemon(daemon, verb, browser = 'chromium', ...flags) {
   return run(process.execPath, [daemon, verb, browser, ...flags]);
 }
 
-function tempFixture(prefix) {
+export function tempFixture(prefix) {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
-function copy(source, target) {
+export function copy(source, target) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(path.join(repo, source), target);
 }
 
-function writeExecutable(target, contents) {
+export function writeExecutable(target, contents) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, contents);
   fs.chmodSync(target, 0o755);
 }
 
-function installFakeChromium(fixture) {
+export function installFakeChromium(fixture) {
   writeExecutable(
     path.join(fixture, 'fingerprint-chromium/Chromium.app/Contents/MacOS/Chromium'),
     `#!/bin/bash\nexec "${process.execPath}" "${repo}/tests/fixtures/fake-browser.js" "$@"\n`,
   );
 }
 
-function writeDaemonFixture(fixture, replacements = []) {
+export function writeDaemonFixture(fixture, replacements = []) {
   const daemon = path.join(fixture, 'src/daemon.ts');
   let source = fs.readFileSync(path.join(repo, 'src/daemon.ts'), 'utf8');
   for (const [from, to] of replacements) {
@@ -61,7 +62,7 @@ function writeDaemonFixture(fixture, replacements = []) {
   return daemon;
 }
 
-function createLauncherFixture() {
+export function createLauncherFixture() {
   const fixture = tempFixture('browser-swarm-launcher-');
   copy('src/launch.ts', path.join(fixture, 'src/launch.ts'));
   fs.writeFileSync(path.join(fixture, 'src/daemon.ts'), `
@@ -78,7 +79,7 @@ export async function ensure() {
   return fixture;
 }
 
-function messageQueue(stream, includeLine = false) {
+export function messageQueue(stream, includeLine = false) {
   const queued = [];
   const waiting = [];
   readline.createInterface({ input: stream }).on('line', (line) => {
@@ -97,7 +98,7 @@ function messageQueue(stream, includeLine = false) {
   };
 }
 
-function spawnJsonRpc(command, args, options = {}) {
+export function spawnJsonRpc(command, args, options = {}) {
   const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], ...options });
   return {
     child,
@@ -106,30 +107,12 @@ function spawnJsonRpc(command, args, options = {}) {
   };
 }
 
-async function initialize(session) {
+export async function initialize(session) {
   session.send(initializeRequest);
   await session.responses.next((message) => message.id === 1);
   session.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
 }
 
-function delay(milliseconds) {
+export function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
-
-module.exports = {
-  copy,
-  createLauncherFixture,
-  delay,
-  freePort,
-  initialize,
-  initializeRequest,
-  installFakeChromium,
-  messageQueue,
-  repo,
-  run,
-  runDaemon,
-  spawnJsonRpc,
-  tempFixture,
-  writeDaemonFixture,
-  writeExecutable,
-};

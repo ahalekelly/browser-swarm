@@ -1,16 +1,16 @@
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { spawnSync } = require('node:child_process');
-const test = require('node:test');
-const {
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import test from 'node:test';
+import {
   delay,
   freePort,
   installFakeChromium,
   runDaemon,
   tempFixture,
   writeDaemonFixture,
-} = require('./helpers');
+} from './helpers.js';
 
 test('Chromium stop writes a clean marker', async (t) => {
   const fixture = await chromiumFixture(t, false);

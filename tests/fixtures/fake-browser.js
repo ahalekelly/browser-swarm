@@ -4,9 +4,9 @@
 // file inside the passed profile dir open for its whole lifetime — real
 // Chromium always does — which is what the daemon's port-derived ownership
 // check looks for.
-const fs = require('node:fs');
-const http = require('node:http');
-const path = require('node:path');
+import fs from 'node:fs';
+import http from 'node:http';
+import path from 'node:path';
 
 const flag = (name) => {
   const argument = process.argv.find((candidate) => candidate.startsWith(`--${name}=`));

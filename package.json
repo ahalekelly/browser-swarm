@@ -3,6 +3,7 @@
   "version": "0.1.1",
   "description": "BrowserSwarm — one shared headless browser for every agent in a fan-out. npx installer.",
   "license": "MIT",
+  "type": "module",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ahalekelly/browser-swarm.git"

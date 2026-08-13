@@ -1,17 +1,17 @@
 // Agent sandboxes block writes outside a few directories while allowing lsof
 // and loopback traffic. Ownership reads must still work: blind-fire start
 // reports an existing daemon, while cold start and stop name the required fix.
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const http = require('node:http');
-const test = require('node:test');
-const {
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import http from 'node:http';
+import test from 'node:test';
+import {
   freePort,
   installFakeChromium,
   runDaemon,
   tempFixture,
   writeDaemonFixture,
-} = require('./helpers');
+} from './helpers.js';
 
 test('ownership and attach survive a shell that cannot write beside the daemon', async (t) => {
   const fixture = await daemonFixture(t);

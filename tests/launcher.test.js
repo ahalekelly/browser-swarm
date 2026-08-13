@@ -1,10 +1,10 @@
 // The TypeScript launcher must supervise the pinned MCP directly and hand every
 // invocation a distinct output directory.
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const test = require('node:test');
-const { createLauncherFixture, run } = require('./helpers');
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import test from 'node:test';
+import { createLauncherFixture, run } from './helpers.js';
 
 const browsers = [
   {

@@ -1,12 +1,12 @@
 // The merged launcher must be invisible on the wire: the pinned Playwright MCP
 // is driven through a full handshake directly and under launch.ts, and the two
 // transcripts must match byte for byte.
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { spawn } = require('node:child_process');
-const test = require('node:test');
-const { copy, messageQueue, repo, tempFixture } = require('./helpers');
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import test from 'node:test';
+import { copy, messageQueue, repo, tempFixture } from './helpers.js';
 
 const node = process.execPath;
 const playwrightMcp = path.join(repo, 'node_modules/@playwright/mcp/cli.js');
