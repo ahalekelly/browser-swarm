@@ -35,10 +35,8 @@ test('a post-crash restart survives the sacrificed launcher process group being 
     daemon,
     fs.readFileSync(path.join(repo, 'src/daemon.ts'), 'utf8')
       .replace('port: 9377,', `port: ${port},`)
-      .replace("connectionLabel: 'CDP http://localhost:9377',", `connectionLabel: 'CDP http://localhost:${port}',`)
       .replace('const IDLE_POLL_MS = 30_000;', 'const IDLE_POLL_MS = 1_000;')
-      .replace('const IDLE_POLLS = 10;', 'const IDLE_POLLS = 600;')
-      .replace('http://localhost:9377', `http://localhost:${port}`),
+      .replace('const IDLE_POLLS = 10;', 'const IDLE_POLLS = 600;'),
   );
 
   assert.equal(runDaemon(daemon, 'start').status, 0);
