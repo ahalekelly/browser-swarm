@@ -180,7 +180,9 @@ async function serve(backend: Backend): Promise<void> {
   let listenerPid: number | undefined;
   for (let attempt = 0; attempt < 20; attempt += 1) {
     if (shuttingDown) return;
-    if (await Promise.race([closed.then(() => true), delay(0).then(() => false)])) return;
+    if (await Promise.race([closed.then(() => true), delay(0).then(() => false)])) {
+      throw new Error(`${backend.displayName} exited before establishing ownership of port ${backend.port}`);
+    }
     if (await ready(backend)) {
       listenerPid = ownerPid(backend);
       if (listenerPid === expectedOwner) break;
@@ -373,13 +375,13 @@ function markClean(backend: Backend): void {
 }
 
 function markerIsRunning(backend: Backend): boolean {
-  return existsSync(backend.stateFile) && readFileSync(backend.stateFile, 'utf8').startsWith('running ');
-}
-
-function crashed(backend: Backend): boolean {
   if (!existsSync(backend.stateFile)) return false;
   const [state, boot] = readFileSync(backend.stateFile, 'utf8').trim().split(/\s+/);
   return state === 'running' && boot === bootEpoch();
+}
+
+function crashed(backend: Backend): boolean {
+  return markerIsRunning(backend);
 }
 
 function chromiumBinary(): string {

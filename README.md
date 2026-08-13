@@ -61,7 +61,7 @@ npm run test:firefox
 - `browser-swarm`: fingerprint-Chromium for normal browser work.
 - `browser-swarm-firefox`: Firefox for sites confirmed to block Chromium.
 
-One Claude definition can run concurrently because the local [`mcp-per-subagent`](https://github.com/ahalekelly/claude-patching) patch gives every subagent its own MCP server process. `src/launch.ts` checks the patch canary before touching a daemon; an unpatched Claude Code session fails rather than sharing one browser session. [The bug record](docs/claude-code-mcp-dedup.md) explains why.
+Claude agents can run concurrently because the local [`mcp-per-subagent`](https://github.com/ahalekelly/claude-patching) patch gives each subagent its own MCP server process. `src/launch.ts` checks the patch canary before touching a daemon; an unpatched Claude Code session fails rather than sharing a browser session. [The bug record](docs/claude-code-mcp-dedup.md) explains why.
 
 [`codex-agents/`](codex-agents/) generates one reusable `browser-swarm` definition. The canary only applies when `CLAUDECODE=1`, so Codex launches pass unchanged.
 
