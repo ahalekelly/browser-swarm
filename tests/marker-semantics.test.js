@@ -32,7 +32,7 @@ async function chromiumFixture(t, shortIdle) {
   installFakeChromium(dir);
   const replacements = [['const port = firefox ? 9378 : 9377;', `const port = firefox ? 9378 : ${port};`]];
   if (shortIdle) replacements.push(
-    ['const IDLE_POLL_MS = 30_000;', 'const IDLE_POLL_MS = 50;'],
+    ['const IDLE_POLL_MS = 30_000;', 'const IDLE_POLL_MS = 500;'],
     ['const IDLE_POLLS = 10;', 'const IDLE_POLLS = 2;'],
   );
   const daemon = writeDaemonFixture(dir, replacements);
