@@ -171,8 +171,9 @@ async function serve(backend: Backend): Promise<void> {
       await server.close();
     }
   };
-  process.once('SIGINT', () => { void shutdown(); });
-  process.once('SIGTERM', () => { void shutdown(); });
+  const exitOnSignal = () => { void shutdown().then(() => process.exit()); };
+  process.once('SIGINT', exitOnSignal);
+  process.once('SIGTERM', exitOnSignal);
 
   const expectedOwner = child?.pid ?? process.pid;
   let listenerPid: number | undefined;

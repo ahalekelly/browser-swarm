@@ -64,8 +64,8 @@ async function firefoxFixture(t, shortIdle = false) {
     ['const port = firefox ? 9378 : 9377;', `const port = firefox ? ${port} : 9377;`],
   ];
   if (shortIdle) replacements.push(
-    ['const IDLE_POLL_MS = 30_000;', 'const IDLE_POLL_MS = 50;'],
-    ['const IDLE_POLLS = 10;', 'const IDLE_POLLS = 2;'],
+    ['const IDLE_POLL_MS = 30_000;', 'const IDLE_POLL_MS = 250;'],
+    ['const IDLE_POLLS = 10;', 'const IDLE_POLLS = 4;'],
   );
   const daemon = writeDaemonFixture(fixture, replacements);
   installFakePlaywright(fixture);
