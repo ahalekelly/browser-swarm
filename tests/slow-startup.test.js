@@ -21,8 +21,8 @@ test('the supervisor adopts a browser that opens its port after the launcher giv
   installFakeChromium(fixture, 3000);
   const daemon = writeDaemonFixture(fixture, [
     ['const port = firefox ? 9378 : 9377;', `const port = firefox ? 9378 : ${port};`],
-    ['const LAUNCH_POLLS = 20;', 'const LAUNCH_POLLS = 2;'],
-    ['const SERVE_POLLS = 240;', 'const SERVE_POLLS = 40;'],
+    ['const ATTACH_TIMEOUT_MS = 25_000;', 'const ATTACH_TIMEOUT_MS = 1_000;'],
+    ['const BOOT_TIMEOUT_MS = 120_000;', 'const BOOT_TIMEOUT_MS = 20_000;'],
   ]);
   t.after(() => {
     runDaemon(daemon, 'stop', 'chromium', '--force');
@@ -31,7 +31,7 @@ test('the supervisor adopts a browser that opens its port after the launcher giv
 
   const sacrificed = runDaemon(daemon, 'ensure');
   assert.equal(sacrificed.status, 1, 'the launcher should give up before the slow browser is ready');
-  assert.match(sacrificed.stderr, /relaunch the agent/);
+  assert.match(sacrificed.stderr, /relaunch this agent/);
 
   await adoptedWithin(path.join(fixture, 'chromium-daemon-state'), 15000);
   assert.equal(runDaemon(daemon, 'ensure').status, 0, 'the relaunched agent should attach to the adopted daemon');
