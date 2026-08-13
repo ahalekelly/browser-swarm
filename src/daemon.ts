@@ -10,14 +10,15 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DAEMON_PATH = fileURLToPath(import.meta.url);
 const IDLE_POLL_MS = 30_000;
 const IDLE_POLLS = 10;
-// A launcher must answer its MCP client before that client's startup timeout,
-// so it gives up quickly and tells the agent to relaunch. The supervisor has
-// nothing to lose by waiting, and a cold first launch is slow: macOS scans the
-// app bundle, the binary is not in page cache, and utility QoS deprioritises
-// it. Killing a browser that is merely slow costs every later agent too.
-const READY_POLL_MS = 500;
-const LAUNCH_POLLS = 20;
-const SERVE_POLLS = 240;
+const POLL_MS = 500;
+// A launcher runs inside its MCP client's connection timeout (30s in Claude
+// Code), so it gives up well before the supervisor does and tells the agent to
+// relaunch. The supervisor has nothing to lose by waiting, and a cold first
+// launch is slow: macOS scans the app bundle, the binary is not in page cache,
+// and utility QoS deprioritises it. Killing a browser that is merely slow
+// costs every later agent too.
+const ATTACH_TIMEOUT_MS = 25_000;
+const BOOT_TIMEOUT_MS = 120_000;
 const KILL_AFTER_MS = 2000;
 const FIREFOX_ENDPOINT = 'ws://127.0.0.1:9378/browser-swarm';
 
@@ -72,11 +73,8 @@ async function start(backend: Backend): Promise<void> {
 
   const startingOwner = ownerPid(backend);
   if (startingOwner !== undefined) {
-    for (let attempt = 0; attempt < LAUNCH_POLLS; attempt += 1) {
-      if (await ready(backend)) return useRunningDaemon(backend, true);
-      await delay(READY_POLL_MS);
-    }
-    throw new DaemonError(`${backend.displayName} owns port ${backend.port} but did not become ready within ${seconds(LAUNCH_POLLS)}; last log lines:\n${lastLogLines(backend.log)}`);
+    if (await waitFor(() => ready(backend), ATTACH_TIMEOUT_MS)) return useRunningDaemon(backend, true);
+    throw new DaemonError(`${backend.displayName} owns port ${backend.port} but did not become ready within ${seconds(ATTACH_TIMEOUT_MS)}; last log lines:\n${lastLogLines(backend.log)}`);
   }
 
   if (hasListener(backend.port)) {
@@ -94,12 +92,11 @@ async function start(backend: Backend): Promise<void> {
   if (crashed(backend)) console.error(`warning: previous ${backend.displayName} instance shut down uncleanly (crashed or killed) — see ${backend.log}`);
   spawnDetached(backend.log, process.execPath, [DAEMON_PATH, 'serve', backend.browserName]);
 
-  for (let attempt = 0; attempt < LAUNCH_POLLS; attempt += 1) {
-    if (await ready(backend) && markerIsRunning(backend)) return useRunningDaemon(backend, false);
-    await delay(READY_POLL_MS);
+  if (await waitFor(async () => await ready(backend) && markerIsRunning(backend), ATTACH_TIMEOUT_MS)) {
+    return useRunningDaemon(backend, false);
   }
 
-  throw new DaemonError(`${backend.displayName} did not answer on port ${backend.port} within ${seconds(LAUNCH_POLLS)} — its supervisor keeps starting it, so relaunch the agent to attach; last log lines:\n${lastLogLines(backend.log)}`);
+  throw new DaemonError(`${backend.displayName} did not answer on port ${backend.port} within ${seconds(ATTACH_TIMEOUT_MS)}. A cold start keeps booting in the background for up to ${seconds(BOOT_TIMEOUT_MS)} — relaunch this agent to attach to it. Last log lines:\n${lastLogLines(backend.log)}`);
 }
 
 function useRunningDaemon(backend: Backend, alreadyUp: boolean): void {
@@ -131,6 +128,15 @@ async function prepareBackend(backend: Backend): Promise<void> {
 }
 
 async function serve(backend: Backend): Promise<void> {
+  // Two launchers can cold-start at once, each spawning a supervisor. The one
+  // that finds the port already served steps aside instead of starting a
+  // second browser against the same profile.
+  const serving = (await ready(backend)) ? ownerPid(backend) : undefined;
+  if (serving !== undefined) {
+    console.error(`${timestamp()} serve: port ${backend.port} is already served by pid ${serving}, exiting`);
+    return;
+  }
+
   mkdirSync(backend.profile, { recursive: true });
   let child: ChildProcess | undefined;
   let server;
@@ -187,24 +193,25 @@ async function serve(backend: Backend): Promise<void> {
 
   const expectedOwner = child?.pid ?? process.pid;
   let listenerPid: number | undefined;
-  for (let attempt = 0; attempt < SERVE_POLLS; attempt += 1) {
+  for (let waited = 0; waited < BOOT_TIMEOUT_MS; waited += POLL_MS) {
     if (shuttingDown) return;
     if (await Promise.race([closed.then(() => true), delay(0).then(() => false)])) {
-      throw new Error(`${backend.displayName} exited before establishing ownership of port ${backend.port}`);
+      throw new DaemonError(`${backend.displayName} exited before establishing ownership of port ${backend.port}`);
     }
     if (await ready(backend)) {
       listenerPid = ownerPid(backend);
       if (listenerPid === expectedOwner) break;
       if (listenerPid !== undefined) {
         await shutdown();
-        throw new Error(`${backend.displayName} lost its startup race to pid ${listenerPid}`);
+        console.error(`${timestamp()} serve: pid ${listenerPid} won the startup race for port ${backend.port}, exiting`);
+        return;
       }
     }
-    await delay(READY_POLL_MS);
+    await delay(POLL_MS);
   }
   if (listenerPid !== expectedOwner) {
     await shutdown();
-    throw new Error(`${backend.displayName} did not establish ownership of port ${backend.port} within ${seconds(SERVE_POLLS)}`);
+    throw new DaemonError(`${backend.displayName} did not establish ownership of port ${backend.port} within ${seconds(BOOT_TIMEOUT_MS)}`);
   }
 
   markRunning(backend);
@@ -328,12 +335,15 @@ function connectionLabel(backend: Backend): string {
     : `WebSocket ${backend.clientEndpoint}`;
 }
 
-// The listener is ours when it holds a file inside our profile dir open. Use
-// lsof's file tables because agent sandboxes commonly block ps but allow lsof.
+// The listener is ours when it holds a file inside our install dir open — its
+// binary, its profile, or its lock. Matching the install dir rather than one
+// path inside it keeps a running browser recognizable across upgrades that move
+// those files; a browser we did not launch holds nothing here open. Use lsof's
+// file tables because agent sandboxes commonly block ps but allow lsof.
 function ownerPid(backend: Backend): number | undefined {
   for (const pid of listenerPids(backend.port)) {
     const result = spawnSync('lsof', ['-p', String(pid)], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-    if (result.status === 0 && result.stdout.includes(`${backend.profile}/`)) return pid;
+    if (result.status === 0 && result.stdout.includes(`${ROOT}/`)) return pid;
   }
 }
 
@@ -426,12 +436,20 @@ function timestamp(): string {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
 }
 
-function seconds(polls: number): string {
-  return `${(polls * READY_POLL_MS) / 1000}s`;
-}
-
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+}
+
+async function waitFor(condition: () => Promise<boolean>, timeout: number): Promise<boolean> {
+  for (let waited = 0; waited < timeout; waited += POLL_MS) {
+    if (await condition()) return true;
+    await delay(POLL_MS);
+  }
+  return false;
+}
+
+function seconds(milliseconds: number): string {
+  return `${milliseconds / 1000}s`;
 }
 
 async function main(): Promise<void> {
