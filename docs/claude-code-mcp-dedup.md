@@ -8,7 +8,7 @@ The server name is the key. Byte-identical configs share one session; nested sub
 
 The [`mcp-per-subagent`](https://github.com/ahalekelly/claude-patching) patch gives every subagent its own stdio MCP server process and stamps `CLAUDE_MCP_PER_AGENT=1` into that server's environment. BrowserSwarm therefore ships one reusable `browser-swarm` definition with server name `playwright`; every invocation gets a distinct MCP process, output directory, and isolated browser context.
 
-`src/launch.ts` enforces the patch as a canary. When `CLAUDECODE=1` without `CLAUDE_MCP_PER_AGENT=1`, it exits before touching either browser daemon and explains how to install the patch. Stock Claude Code gets a loud refusal rather than silent context sharing. Codex does not set `CLAUDECODE`, so the check does not apply there.
+`src/launch.ts` enforces the patch as a canary. When `CLAUDECODE=1` without `CLAUDE_MCP_PER_AGENT=1`, it leaves either browser daemon untouched and exposes installation instructions through the session's sole `browser_swarm_error` MCP tool. Stock Claude Code gets a loud refusal rather than silent context sharing. Codex does not set `CLAUDECODE`, so the check does not apply there.
 
 When upstream fixes #84638, only this canary needs removal. The single reusable agent and per-invocation isolated contexts remain the intended design.
 
