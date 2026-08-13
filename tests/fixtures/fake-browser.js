@@ -3,7 +3,8 @@
 // /json/version on the given port and keeps running until killed. It holds a
 // file inside the passed profile dir open for its whole lifetime — real
 // Chromium always does — which is what the daemon's port-derived ownership
-// check looks for.
+// check looks for. FAKE_BROWSER_STARTUP_MS stands in for a cold real launch,
+// which opens its port long after the process starts.
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -20,7 +21,7 @@ const profile = flag('user-data-dir');
 fs.mkdirSync(profile, { recursive: true });
 fs.openSync(path.join(profile, 'FakeBrowserLock'), 'w'); // held open until exit
 
-http.createServer((request, response) => {
+const server = http.createServer((request, response) => {
   response.setHeader('content-type', 'application/json');
   if (request.url === '/json/version') {
     response.end(JSON.stringify({
@@ -31,4 +32,6 @@ http.createServer((request, response) => {
   }
   response.statusCode = 404;
   response.end('{}');
-}).listen(port, '127.0.0.1');
+});
+
+setTimeout(() => server.listen(port, '127.0.0.1'), Number(process.env.FAKE_BROWSER_STARTUP_MS ?? 0));
