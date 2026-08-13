@@ -65,6 +65,7 @@ export function writeDaemonFixture(fixture, replacements = []) {
 export function createLauncherFixture() {
   const fixture = tempFixture('browser-swarm-launcher-');
   copy('src/launch.ts', path.join(fixture, 'src/launch.ts'));
+  copy('package.json', path.join(fixture, 'package.json'));
   fs.writeFileSync(path.join(fixture, 'src/daemon.ts'), `
 import { writeFileSync } from 'node:fs';
 export class DaemonError extends Error { exitCode = 1; }
@@ -72,6 +73,7 @@ export function getBackend(browserName) {
   return { clientEndpoint: browserName === 'chromium' ? 'http://localhost:9377' : 'ws://127.0.0.1:9378/browser-swarm' };
 }
 export async function ensure() {
+  if (process.env.DAEMON_ERROR) throw new DaemonError(process.env.DAEMON_ERROR);
   if (process.env.DAEMON_TOUCH_LOG) writeFileSync(process.env.DAEMON_TOUCH_LOG, 'touched');
 }
 `);

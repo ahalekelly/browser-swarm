@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,33 +10,34 @@ const IDLE_MS = 300_000;
 const TERMINATE_AFTER_MS = 1000;
 const KILL_AFTER_MS = 2000;
 
-if (process.env.CLAUDECODE === '1' && process.env.CLAUDE_MCP_PER_AGENT !== '1') {
-  console.error('ERROR: BrowserSwarm requires patched Claude Code. This unpatched session shares same-named inline MCP servers between subagents, which makes agents share one browser session. Install the mcp-per-subagent patch from https://github.com/ahalekelly/claude-patching and see https://github.com/anthropics/claude-code/issues/84638.');
+let browser: BrowserName;
+try {
+  if (process.env.CLAUDECODE === '1' && process.env.CLAUDE_MCP_PER_AGENT !== '1') {
+    throw new DaemonError('BrowserSwarm requires patched Claude Code. This unpatched session shares same-named inline MCP servers between subagents, which makes agents share one browser session. Install the mcp-per-subagent patch from https://github.com/ahalekelly/claude-patching and see https://github.com/anthropics/claude-code/issues/84638.');
+  }
+
+  browser = process.argv[2] as BrowserName;
+  if (browser !== 'chromium' && browser !== 'firefox') {
+    throw new DaemonError('usage: launch.ts chromium|firefox', 2);
+  }
+  await ensure(browser);
+} catch (error) {
+  const message = error instanceof DaemonError
+    ? error.message
+    : error instanceof Error
+      ? (error.stack ?? error.message)
+      : String(error);
+  console.error(`ERROR: ${message}`);
+  await serveStartupError(message);
   process.exit(1);
 }
 
-const browser = process.argv[2] as BrowserName;
-if (browser !== 'chromium' && browser !== 'firefox') {
-  console.error('usage: launch.ts chromium|firefox');
-  process.exit(2);
-}
-
-try {
-  await ensure(browser);
-} catch (error) {
-  if (error instanceof DaemonError) {
-    console.error(`ERROR: ${error.message}`);
-    process.exit(error.exitCode);
-  }
-  throw error;
-}
-
-const backend = getBackend(browser);
+const backend = getBackend(browser!);
 const mcp = join(ROOT, 'node_modules/@playwright/mcp/cli.js');
-const endpointArgs = browser === 'chromium'
+const endpointArgs = browser! === 'chromium'
   ? ['--cdp-endpoint', backend.clientEndpoint]
   : ['--endpoint', backend.clientEndpoint];
-const output = `/tmp/claude/pwmcp-${browser === 'chromium' ? 'swarm' : 'firefox'}-${process.pid}`;
+const output = `/tmp/claude/pwmcp-${browser! === 'chromium' ? 'swarm' : 'firefox'}-${process.pid}`;
 const child = spawn(process.execPath, [
   mcp,
   ...endpointArgs,
@@ -79,6 +81,54 @@ child.on('close', (code, signal) => {
   process.exitCode = stopping ? process.exitCode : (code ?? 1);
   process.stdin.destroy();
 });
+
+async function serveStartupError(message) {
+  const version = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
+  const text = `BrowserSwarm could not attach browser tools to this session. Error: ${message}. Stop and report this error to the orchestrator; do not work around it with other tools.`;
+  const respond = (id, result) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`);
+
+  process.stdin.on('data', observe((request) => {
+    if (!hasId(request)) return;
+    if (request.method === 'initialize') {
+      respond(request.id, {
+        protocolVersion: request.params?.protocolVersion ?? '2025-06-18',
+        capabilities: { tools: {} },
+        serverInfo: { name: 'browser-swarm', version },
+      });
+    } else if (request.method === 'ping') {
+      respond(request.id, {});
+    } else if (request.method === 'tools/list') {
+      respond(request.id, {
+        tools: [{
+          name: 'browser_swarm_error',
+          description: text,
+          inputSchema: { type: 'object', properties: {} },
+        }],
+      });
+    } else if (request.method === 'tools/call') {
+      respond(request.id, {
+        content: [{ type: 'text', text }],
+        isError: true,
+      });
+    } else {
+      process.stdout.write(`${JSON.stringify({
+        jsonrpc: '2.0',
+        id: request.id,
+        error: { code: -32601, message: 'Method not found' },
+      })}\n`);
+    }
+  }));
+
+  await new Promise((resolveEnd) => {
+    const finish = () => {
+      process.exitCode = 1;
+      resolveEnd();
+    };
+    process.stdin.once('end', finish);
+    process.once('SIGINT', finish);
+    process.once('SIGTERM', finish);
+  });
+}
 
 function onClientMessage(message) {
   if (message.method === 'initialize' && hasId(message)) {
