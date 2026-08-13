@@ -58,10 +58,6 @@ export async function ensure(browserName: BrowserName): Promise<void> {
   await start(backend);
 }
 
-export function firefoxEndpoint(): string {
-  return FIREFOX_ENDPOINT;
-}
-
 async function start(backend: Backend): Promise<void> {
   if (await ready(backend)) return useRunningDaemon(backend, true);
 
