@@ -12,7 +12,7 @@ Supported hosts: macOS on Apple silicon and Linux on x86_64. Node.js 22.18 or ne
 npx browser-swarm
 ```
 
-The installer clones the repo to `~/.browser-swarm`, runs `npm ci`, installs both pinned browsers, and generates Claude Code and Codex agent definitions. From a checkout, run the pieces directly:
+The installer clones the repo to `~/.browser-swarm`, runs `npm ci`, installs both pinned browsers, and generates Claude Code and Codex agent definitions. The Linux installer needs `sudo` once to install Chromium's AppArmor profile. From a checkout, run the pieces directly:
 
 ```sh
 npm ci

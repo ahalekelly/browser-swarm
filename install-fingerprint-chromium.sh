@@ -6,6 +6,36 @@ VERSION=148.0.7778.215
 DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="$DIR/fingerprint-chromium"
 
+install_linux_apparmor_profile() {
+  [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ] || return
+  [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ] || return
+
+  local path=/etc/apparmor.d/browser-swarm-chromium
+  local profile
+  profile="$(cat <<EOF
+abi <abi/5.0>,
+include <tunables/global>
+profile browser-swarm-chromium $INSTALL_DIR/chrome flags=(unconfined) {
+  userns,
+}
+EOF
+)"
+  if [ -f "$path" ] && printf '%s\n' "$profile" | cmp -s - "$path"; then
+    return
+  fi
+  if ! sudo -n true; then
+    echo "ERROR: BrowserSwarm needs sudo once to install its Chromium AppArmor profile. Run:" >&2
+    printf '%s\n' \
+      "sudo tee /etc/apparmor.d/browser-swarm-chromium >/dev/null <<'EOF'" \
+      "$profile" \
+      "EOF" \
+      "sudo apparmor_parser -r /etc/apparmor.d/browser-swarm-chromium" >&2
+    exit 1
+  fi
+  printf '%s\n' "$profile" | sudo tee "$path" >/dev/null
+  sudo apparmor_parser -r "$path"
+}
+
 case "$(uname -sm)" in
   "Darwin arm64")
     URL="https://github.com/adryfish/fingerprint-chromium/releases/download/$VERSION/ungoogled-chromium_${VERSION}-1.1_macos.dmg"
@@ -16,6 +46,7 @@ case "$(uname -sm)" in
     URL="https://github.com/adryfish/fingerprint-chromium/releases/download/$VERSION/ungoogled-chromium-${VERSION}-1-x86_64_linux.tar.xz"
     SHA256=70d239830332e5820aa34dfcb284161cac0429eee25da642830afe04bda717f4
     BINARY="$INSTALL_DIR/chrome"
+    install_linux_apparmor_profile
     ;;
   *)
     echo "ERROR: fingerprint-chromium supports Darwin arm64 and Linux x86_64" >&2
