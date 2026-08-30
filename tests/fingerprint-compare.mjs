@@ -392,7 +392,9 @@ function consistencyLeaks(config, trials) {
     const headerPlatform = trial.requestHeaders['sec-ch-ua-platform'];
     if (headerPlatform && headerPlatform.replaceAll('"', '') !== expected.hints) leaks.add(`sec-ch-ua-platform=${headerPlatform}`);
     const renderer = `${fingerprint.webgl?.vendor ?? ''} ${fingerprint.webgl?.renderer ?? ''}`;
-    if (platform !== 'linux' && /Mesa|llvmpipe|Linux/i.test(renderer)) leaks.add(`WebGL=${renderer.trim()}`);
+    if (/SwiftShader|llvmpipe|Mesa/i.test(renderer) || (platform !== 'linux' && /Linux/i.test(renderer))) {
+      leaks.add(`WebGL=${renderer.trim()}`);
+    }
   }
   return [...leaks];
 }
