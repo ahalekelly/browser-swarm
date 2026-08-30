@@ -19,6 +19,10 @@ const TARGETS = {
   rebrowser: 'https://bot-detector.rebrowser.net/',
   amazon: 'https://www.amazon.com/dp/B0D1XD1ZV3',
   google: 'https://www.google.com/search?q=browser+automation',
+  'cloudflare-challenge': 'https://www.scrapingcourse.com/cloudflare-challenge',
+  'akamai-homedepot': 'https://www.homedepot.com/p/DEWALT-20V-MAX-Cordless-Drill-Driver-Kit-DCD771C2/205207619',
+  'datadome-leboncoin': 'https://www.leboncoin.fr/',
+  'datadome-stacked-hermes': 'https://www.hermes.com/us/en/',
 };
 const DETECTION_BODY_MARKERS = {
   akamai: /bazadebezolkohpepadr|\/akam\//i,
