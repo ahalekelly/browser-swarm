@@ -7,8 +7,8 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="$DIR/fingerprint-chromium"
 
 install_linux_apparmor_profile() {
-  [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ] || return
-  [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ] || return
+  [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ] || return 0
+  [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ] || return 0
 
   local path=/etc/apparmor.d/browser-swarm-chromium
   local profile
