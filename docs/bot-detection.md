@@ -37,11 +37,12 @@ node tests/fingerprint-compare.mjs run \
   --trials-per-target 20 \
   --spacing-seconds 15 \
   --cooldown-seconds 3600 \
+  --settle-seconds 8 \
   --jsonl results.jsonl \
   --report docs/reports/fingerprint-platform.md
 ```
 
-Targets may be built-in names or `label=https://url`. Recover a report from an interrupted run with `node tests/fingerprint-compare.mjs report --jsonl results.jsonl --report report.md`. Reverse config order on the next day. Choose the platform with the most rendered trials on protected sites and no consistency leaks; ties go to `macos` so both hosts expose one identity.
+Targets may be built-in names or `label=https://url`. The settle window defaults to eight seconds. Recover a report from an interrupted run with `node tests/fingerprint-compare.mjs report --jsonl results.jsonl --report report.md`. Reverse config order on the next day. Choose the platform with the most rendered trials on protected sites and no consistency leaks; ties go to `macos` so both hosts expose one identity.
 
 Two configuration notes that apply to any patched Chromium driven by Playwright:
 

@@ -34,6 +34,8 @@ const DETECTION_BODY_MARKERS = {
   sucuri: /sucuri website firewall/i,
 };
 const CHALLENGE_BODY = /captcha-delivery|just a moment|cf-chl-|px-captcha|window\.gokuProps|challenge-container|Incapsula incident ID|the requested url was rejected|Radware Captcha Page|botdetect\.min\.js|sucuri website firewall/i;
+const CHALLENGE_PATH_SEGMENT = /captcha|challenge|validate\.perfdrive\.com|queue-it\.net/i;
+const CHALLENGE_TITLE = /^just a moment|access denied|error page|attention required|pardon our interruption|are you a human|verify you are human/i;
 const DETECTION_COOKIE_MARKERS = {
   akamai: /^(?:_abck|bm_sz|ak_bmsc|bm_sv|bm_lso)$/,
   datadome: /^datadome$/,
@@ -143,24 +145,32 @@ async function measure(browser, { runId, config, configIndex, trial, target, set
   try {
     const page = await context.newPage();
     let response;
+    page.on('response', (candidate) => {
+      const request = candidate.request();
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame()) response = candidate;
+    });
     let navigationError;
     try {
-      response = await page.goto(target.url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-      await page.waitForTimeout(settleMs);
+      await page.goto(target.url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     } catch (error) {
       navigationError = error.message;
     }
+    await page.waitForTimeout(settleMs);
+    const settledResponse = response;
 
     const body = await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '');
+    const bodySnippet = body.slice(0, 500);
     const title = await page.title().catch(() => '');
     const cookies = await context.cookies();
-    const requestHeaders = response ? await response.request().allHeaders() : {};
+    const status = settledResponse?.status() ?? null;
+    const requestHeaders = settledResponse ? await settledResponse.request().allHeaders() : {};
     const fingerprint = await readFingerprint(page).catch((error) => ({ error: error.message }));
     const challenge = classifyChallenge({
-      status: response?.status() ?? null,
+      status,
+      targetUrl: target.url,
       finalUrl: page.url(),
       title,
-      body,
+      body: bodySnippet,
       navigationError,
     });
     return {
@@ -175,9 +185,10 @@ async function measure(browser, { runId, config, configIndex, trial, target, set
       targetUrl: target.url,
       trial,
       finalUrl: page.url(),
-      status: response?.status() ?? null,
+      status,
       rendered: challenge.length === 0,
       challenge,
+      bodySnippet,
       detectors: detectSystems(body, cookies),
       navigationError: navigationError ?? null,
       requestHeaders: {
@@ -211,7 +222,7 @@ function parseRunArgs(args) {
     trialsPerTarget: positiveInteger(values['trials-per-target'], '--trials-per-target'),
     spacingMs: seconds(values['spacing-seconds'], '--spacing-seconds'),
     cooldownMs: seconds(values['cooldown-seconds'], '--cooldown-seconds'),
-    settleMs: seconds(values['settle-seconds'] ?? '5', '--settle-seconds'),
+    settleMs: seconds(values['settle-seconds'] ?? '8', '--settle-seconds'),
     jsonl: resolve(values.jsonl),
     report: resolve(values.report),
     seed: values.seed ?? '42424242',
@@ -255,7 +266,8 @@ function renderReport({ jsonl, report, runId }) {
         fail(`invalid JSON on ${jsonl} line ${index + 1}`);
       }
     })
-    .filter((record) => record.type === 'trial' && (!runId || record.runId === runId));
+    .filter((record) => record.type === 'trial' && (!runId || record.runId === runId))
+    .map(scoreStoredRecord);
   if (records.length === 0) fail(`no trial records found in ${jsonl}${runId ? ` for run ${runId}` : ''}`);
 
   const lines = [
@@ -351,14 +363,40 @@ async function readFingerprint(page) {
   });
 }
 
-function classifyChallenge({ status, finalUrl, title, body, navigationError }) {
+function scoreStoredRecord(record) {
+  const challenge = classifyChallenge({
+    status: record.status,
+    targetUrl: record.targetUrl,
+    finalUrl: record.finalUrl,
+    title: record.title,
+    body: record.bodySnippet ?? '',
+    navigationError: record.navigationError,
+  });
+  if (record.bodySnippet === undefined) {
+    for (const marker of record.challenge) {
+      if (marker === 'challenge-body' || marker === 'empty-page') challenge.push(marker);
+    }
+  }
+  return { ...record, challenge: [...new Set(challenge)], rendered: challenge.length === 0 };
+}
+
+function classifyChallenge({ status, targetUrl, finalUrl, title, body, navigationError }) {
   const markers = [];
   if (navigationError) markers.push('navigation-error');
   if ([202, 403, 405, 406, 429].includes(status) || (status !== null && status >= 500)) markers.push(`status-${status}`);
-  if (/captcha|challenge|validate\.perfdrive\.com|queue-it\.net/i.test(finalUrl)) markers.push('challenge-url');
+  if (isChallengeUrl(targetUrl, finalUrl)) markers.push('challenge-url');
+  if (CHALLENGE_TITLE.test(title)) markers.push('challenge-title');
   if (CHALLENGE_BODY.test(body)) markers.push('challenge-body');
   if (status !== null && status < 400 && title.trim() === '' && body.trim().length < 100) markers.push('empty-page');
   return [...new Set(markers)];
+}
+
+function isChallengeUrl(targetUrl, finalUrl) {
+  const target = new URL(targetUrl);
+  const final = new URL(finalUrl);
+  if (final.host !== target.host) return true;
+  const targetSegments = new Set(target.pathname.split('/').filter(Boolean).map((segment) => segment.toLowerCase()));
+  return final.pathname.split('/').filter(Boolean).some((segment) => CHALLENGE_PATH_SEGMENT.test(segment) && !targetSegments.has(segment.toLowerCase()));
 }
 
 function detectSystems(body, cookies) {
@@ -442,7 +480,7 @@ function delay(milliseconds) {
 
 function usage() {
   console.log(`Usage:
-  node tests/fingerprint-compare.mjs run --configs stock,macos,linux,windows --targets creepjs,browserleaks-javascript --trials-per-target 1 --spacing-seconds 0 --cooldown-seconds 0 --jsonl results.jsonl --report report.md
+  node tests/fingerprint-compare.mjs run --configs stock,macos,linux,windows --targets creepjs,browserleaks-javascript --trials-per-target 1 --spacing-seconds 0 --cooldown-seconds 0 [--settle-seconds 8] --jsonl results.jsonl --report report.md
   node tests/fingerprint-compare.mjs report --jsonl results.jsonl --report report.md [--run-id ID]
 
 Targets may be built-in names or label=https://url.`);
