@@ -7,6 +7,8 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="$DIR/fingerprint-chromium"
 
 install_linux_apparmor_profile() {
+  # The attachment glob also covers pi-for-claude worktrees under .agents/worktrees/,
+  # whose tests launch their own copy of the binary.
   [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ] || return 0
   [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ] || return 0
 
@@ -15,7 +17,7 @@ install_linux_apparmor_profile() {
   profile="$(cat <<EOF
 abi <abi/5.0>,
 include <tunables/global>
-profile browser-swarm-chromium $INSTALL_DIR/chrome flags=(unconfined) {
+profile browser-swarm-chromium "$DIR/{,.agents/worktrees/*/}fingerprint-chromium/chrome" flags=(unconfined) {
   userns,
 }
 EOF
