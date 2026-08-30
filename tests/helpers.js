@@ -43,8 +43,11 @@ export function writeExecutable(target, contents) {
 }
 
 export function installFakeChromium(fixture, startupMs = 0) {
+  const binary = process.platform === 'darwin'
+    ? 'fingerprint-chromium/Chromium.app/Contents/MacOS/Chromium'
+    : 'fingerprint-chromium/chrome';
   writeExecutable(
-    path.join(fixture, 'fingerprint-chromium/Chromium.app/Contents/MacOS/Chromium'),
+    path.join(fixture, binary),
     `#!/bin/bash\nexport FAKE_BROWSER_STARTUP_MS=${startupMs}\nexec "${process.execPath}" "${repo}/tests/fixtures/fake-browser.js" "$@"\n`,
   );
 }

@@ -24,9 +24,24 @@ Where a browser isn't strictly required, the more reliable path is not to drive 
 
 ## Why fingerprint-chromium
 
-[fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) is BSD-3 licensed, tracks a recent Chromium, ships a macOS arm64 build, and removes the `HeadlessChrome` product name in C++ unconditionally. It also disables `Runtime.enable` in the binary, which is more durable than a driver-side change since no client upgrade can undo it.
+[fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) is BSD-3 licensed, tracks a recent Chromium, ships macOS arm64 and Linux x86_64 builds, and removes the `HeadlessChrome` product name in C++ unconditionally. It also disables `Runtime.enable` in the binary, which is more durable than a driver-side change since no client upgrade can undo it.
 
-Its main fork, cloakbrowser, scores the same overall headless on the same targets, differing only on which individual sites render; the upstream is slightly lighter. fingerprint-chromium's one real deficit is that WebGL vendor/renderer customization is Linux-only, so on macOS it reports the true GPU.
+Its main fork, cloakbrowser, scores the same overall headless on the same targets, differing only on which individual sites render; the upstream is slightly lighter. The persistent fingerprint seed derives GPU vendor and renderer values. Current builds removed the manual GPU flags.
+
+[`tests/fingerprint-compare.mjs`](../tests/fingerprint-compare.mjs) measures ordered `linux`, `macos`, and `windows` platform blocks with one seed. `stock` runs Playwright's bundled Chromium without fingerprint flags; install that control with `node_modules/.bin/playwright install chromium`. Each trial gets a fresh context and appends its result to JSONL before the next delay. The completed run renders a Markdown report:
+
+```sh
+node tests/fingerprint-compare.mjs run \
+  --configs macos,linux,windows \
+  --targets browserleaks-javascript,amazon \
+  --trials-per-target 20 \
+  --spacing-seconds 15 \
+  --cooldown-seconds 3600 \
+  --jsonl results.jsonl \
+  --report docs/reports/fingerprint-platform.md
+```
+
+Targets may be built-in names or `label=https://url`. Recover a report from an interrupted run with `node tests/fingerprint-compare.mjs report --jsonl results.jsonl --report report.md`. Reverse config order on the next day. Choose the platform with the most rendered trials on protected sites and no consistency leaks; ties go to `macos` so both hosts expose one identity.
 
 Two configuration notes that apply to any patched Chromium driven by Playwright:
 

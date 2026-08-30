@@ -4,7 +4,7 @@ BrowserSwarm gives concurrent agents isolated browser contexts on two shared hea
 
 The standard pinned [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) provides the tools and wire protocol. A transparent TypeScript stdio supervisor gives each MCP session a five-minute inactivity lease. The TypeScript daemon runtime owns browser startup, crash reporting, idle shutdown, and safe port ownership.
 
-macOS on Apple silicon only. The embedded Node.js must support direct erasable-syntax TypeScript execution (Node 26 at install time).
+Supported hosts: macOS on Apple silicon and Linux on x86_64. Node.js 22.18 or newer is required for direct TypeScript execution.
 
 ## Install
 
@@ -81,7 +81,7 @@ Both agent families splice their operating prompt from [agent-prompt.md](agent-p
 
 ## How it works
 
-**One lifecycle, two backends.** One detached `serve` supervisor per backend owns crash state and idle shutdown. Chromium's supervisor runs bare fingerprint-Chromium on CDP port 9377 under `taskpolicy -c utility`. Firefox's supervisor runs Playwright's managed build through plain `firefox.launchServer()` at `ws://127.0.0.1:9378/browser-swarm`. Plain `launchServer` is load-bearing: shared-browser mode disables per-client context isolation.
+**One lifecycle, two backends.** One detached `serve` supervisor per backend owns crash state and idle shutdown. Chromium's supervisor runs bare fingerprint-Chromium on CDP port 9377 at low priority: `taskpolicy -c utility` on macOS and `nice -n 10` on Linux. Firefox's supervisor runs Playwright's managed build through plain `firefox.launchServer()` at `ws://127.0.0.1:9378/browser-swarm`. Plain `launchServer` is load-bearing: shared-browser mode disables per-client context isolation.
 
 **Port-derived ownership.** The listener is ours only when it holds files open inside the install dir — its binary, its profile, or its lock — so a running browser stays recognizable across upgrades that move those files. Concurrent starts converge on one daemon. A foreign listener is a hard error, and `stop` refuses to kill it. Port 9377 avoids CDP's common 9222 default. The check reads `lsof`'s file tables rather than the process's command line because agent sandboxes commonly block `ps` while allowing `lsof`; without that, a sandboxed shell would misread our own daemon as foreign. Verbs that must write beside the daemon — a cold `start`, `stop` — still need an unsandboxed shell and say so when the sandbox denies the write; the blind-fire `start` against an already-running daemon works from anywhere.
 

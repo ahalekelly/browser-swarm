@@ -8,8 +8,11 @@
     "type": "git",
     "url": "git+https://github.com/ahalekelly/browser-swarm.git"
   },
-  "os": ["darwin"],
-  "cpu": ["arm64"],
+  "os": ["darwin", "linux"],
+  "cpu": ["arm64", "x64"],
+  "engines": {
+    "node": ">=22.18"
+  },
   "bin": {
     "browser-swarm": "./install.sh"
   },

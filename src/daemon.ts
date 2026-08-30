@@ -35,6 +35,12 @@ export type Backend = {
   clientEndpoint: string;
 };
 
+type HostPlatform = {
+  chromiumBinary: string;
+  lowPriority: [string, ...string[]];
+  bootId(): string;
+};
+
 export class DaemonError extends Error {
   exitCode: number;
 
@@ -42,6 +48,31 @@ export class DaemonError extends Error {
     super(message);
     this.exitCode = exitCode;
   }
+}
+
+const PLATFORM = hostPlatform();
+
+function hostPlatform(): HostPlatform {
+  if (process.platform === 'darwin' && process.arch === 'arm64') {
+    return {
+      chromiumBinary: 'fingerprint-chromium/Chromium.app/Contents/MacOS/Chromium',
+      lowPriority: ['taskpolicy', '-c', 'utility'],
+      bootId: () => {
+        const output = execFileSync('sysctl', ['-n', 'kern.boottime'], { encoding: 'utf8' });
+        const match = output.match(/sec = (\d+),/);
+        if (!match) throw new DaemonError(`could not parse boot ID: ${output.trim()}`);
+        return match[1];
+      },
+    };
+  }
+  if (process.platform === 'linux' && process.arch === 'x64') {
+    return {
+      chromiumBinary: 'fingerprint-chromium/chrome',
+      lowPriority: ['nice', '-n', '10'],
+      bootId: () => readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(),
+    };
+  }
+  throw new DaemonError(`unsupported platform ${process.platform} ${process.arch}; BrowserSwarm supports Darwin arm64 and Linux x86_64`);
 }
 
 export function getBackend(browserName: BrowserName): Backend {
@@ -145,8 +176,10 @@ async function serve(backend: Backend): Promise<void> {
 
   if (backend.browserName === 'chromium') {
     const fingerprint = readFileSync(join(ROOT, 'fingerprint-seed'), 'utf8').trim();
-    child = spawn('taskpolicy', [
-      '-c', 'utility', chromiumBinary(),
+    const [command, ...priorityArgs] = PLATFORM.lowPriority;
+    child = spawn(command, [
+      ...priorityArgs,
+      chromiumBinary(),
       '--headless',
       `--fingerprint=${fingerprint}`,
       '--fingerprint-platform=macos',
@@ -378,15 +411,8 @@ function listenerDetails(port: number): string {
   return result.stdout.trim();
 }
 
-function bootEpoch(): string {
-  const output = execFileSync('sysctl', ['-n', 'kern.boottime'], { encoding: 'utf8' });
-  const match = output.match(/sec = (\d+),/);
-  if (!match) throw new Error(`could not parse boot epoch: ${output.trim()}`);
-  return match[1];
-}
-
 function markRunning(backend: Backend): void {
-  writeFileSync(backend.stateFile, `running ${bootEpoch()}\n`);
+  writeFileSync(backend.stateFile, `running ${PLATFORM.bootId()}\n`);
 }
 
 function markClean(backend: Backend): void {
@@ -395,8 +421,8 @@ function markClean(backend: Backend): void {
 
 function markerIsRunning(backend: Backend): boolean {
   if (!existsSync(backend.stateFile)) return false;
-  const [state, boot] = readFileSync(backend.stateFile, 'utf8').trim().split(/\s+/);
-  return state === 'running' && boot === bootEpoch();
+  const [state, bootId] = readFileSync(backend.stateFile, 'utf8').trim().split(/\s+/);
+  return state === 'running' && bootId === PLATFORM.bootId();
 }
 
 function crashed(backend: Backend): boolean {
@@ -404,7 +430,7 @@ function crashed(backend: Backend): boolean {
 }
 
 function chromiumBinary(): string {
-  return join(ROOT, 'fingerprint-chromium/Chromium.app/Contents/MacOS/Chromium');
+  return join(ROOT, PLATFORM.chromiumBinary);
 }
 
 function spawnDetached(logPath: string, command: string, args: string[]): void {

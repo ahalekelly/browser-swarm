@@ -9,7 +9,10 @@
 # prunable, and re-fetched — everything a definition must not point into.
 # From an existing checkout, skip this and run the component scripts directly.
 set -euo pipefail
-[ "$(uname -sm)" = "Darwin arm64" ] || { echo "ERROR: BrowserSwarm supports macOS on Apple silicon only" >&2; exit 1; }
+case "$(uname -sm)" in
+  "Darwin arm64"|"Linux x86_64") ;;
+  *) echo "ERROR: BrowserSwarm supports Darwin arm64 and Linux x86_64" >&2; exit 1 ;;
+esac
 TARGET="$HOME/.browser-swarm"
 REPO="https://github.com/ahalekelly/browser-swarm.git"
 
@@ -33,4 +36,4 @@ npm ci
 echo
 echo "BrowserSwarm installed at $TARGET"
 echo "The shared browser auto-starts when a swarm agent runs; manage it with:"
-echo "  $TARGET/swarm start|status|stop [chromium]"
+echo "  $TARGET/swarm start|status|stop [chromium|firefox]"
