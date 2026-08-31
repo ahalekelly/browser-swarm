@@ -1,6 +1,6 @@
 {
   "name": "browser-swarm",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "BrowserSwarm — one shared headless browser for every agent in a fan-out. npx installer.",
   "license": "MIT",
   "type": "module",
