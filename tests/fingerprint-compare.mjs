@@ -10,7 +10,13 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const CONFIGS = ['stock', 'linux', 'macos', 'windows'];
+const CONFIGS = {
+  stock: { platform: null, display: 'headless' },
+  linux: { platform: 'linux', display: 'headless' },
+  'linux-headed': { platform: 'linux', display: 'xvfb' },
+  macos: { platform: 'macos', display: 'headless' },
+  windows: { platform: 'windows', display: 'headless' },
+};
 const TARGETS = {
   creepjs: 'https://abrahamjuliot.github.io/creepjs/',
   'browserleaks-webgl': 'https://browserleaks.com/webgl',
@@ -100,6 +106,7 @@ async function run(options) {
 }
 
 async function launch(config, seed) {
+  const variant = CONFIGS[config];
   if (config === 'stock') {
     const binary = chromium.executablePath();
     if (!existsSync(binary)) fail(`stock Playwright Chromium is not installed (run ${join(ROOT, 'node_modules/.bin/playwright')} install chromium)`);
@@ -108,22 +115,25 @@ async function launch(config, seed) {
   }
 
   const host = hostConfig();
+  if (variant.display === 'xvfb' && process.platform !== 'linux') fail('linux-headed is only available on Linux');
   if (!existsSync(host.binary)) fail(`fingerprint-chromium is not installed at ${host.binary}`);
   const port = await freePort();
   const profile = mkdtempSync(join(tmpdir(), 'fingerprint-compare-'));
-  const [program, ...prefix] = host.lowPriority;
-  let browserLog = '';
-  const child = spawn(program, [
-    ...prefix,
+  const browserArgs = [
     host.binary,
-    '--headless',
+    ...(variant.display === 'headless' ? ['--headless'] : ['--window-size=1920,1080']),
     `--fingerprint=${seed}`,
-    `--fingerprint-platform=${config}`,
+    `--fingerprint-platform=${variant.platform}`,
     '--fingerprint-brand=Chrome',
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${profile}`,
     '--no-first-run',
-  ], { stdio: ['ignore', 'ignore', 'pipe'] });
+  ];
+  const [program, ...args] = variant.display === 'xvfb'
+    ? ['xvfb-run', '--auto-servernum', '--server-args=-screen 0 1920x1080x24', ...host.lowPriority, ...browserArgs]
+    : [...host.lowPriority, ...browserArgs];
+  let browserLog = '';
+  const child = spawn(program, args, { stdio: ['ignore', 'ignore', 'pipe'] });
   child.stderr.on('data', (chunk) => {
     browserLog = `${browserLog}${chunk}`.slice(-20_000);
   });
@@ -216,7 +226,7 @@ function parseRunArgs(args) {
   }
   const configs = csv(values.configs);
   for (const config of configs) {
-    if (!CONFIGS.includes(config)) fail(`unknown config ${config}; use ${CONFIGS.join(', ')}`);
+    if (!Object.hasOwn(CONFIGS, config)) fail(`unknown config ${config}; use ${Object.keys(CONFIGS).join(', ')}`);
   }
   if (new Set(configs).size !== configs.length) fail('--configs must not contain duplicates');
   const targets = csv(values.targets).map(parseTarget);
@@ -416,7 +426,7 @@ function detectSystems(body, cookies) {
 }
 
 function consistencyLeaks(config, trials) {
-  const platform = config === 'stock' ? trials[0].host.startsWith('darwin ') ? 'macos' : 'linux' : config;
+  const platform = config === 'stock' ? trials[0].host.startsWith('darwin ') ? 'macos' : 'linux' : CONFIGS[config].platform;
   const expected = {
     linux: { navigator: 'Linux x86_64', ua: /Linux/, hints: 'Linux' },
     macos: { navigator: 'MacIntel', ua: /Mac OS X/, hints: 'macOS' },
@@ -434,9 +444,13 @@ function consistencyLeaks(config, trials) {
     if (fingerprint.clientHints?.platform !== expected.hints) leaks.add(`client hints platform=${fingerprint.clientHints?.platform}`);
     const headerPlatform = trial.requestHeaders['sec-ch-ua-platform'];
     if (headerPlatform && headerPlatform.replaceAll('"', '') !== expected.hints) leaks.add(`sec-ch-ua-platform=${headerPlatform}`);
-    const renderer = `${fingerprint.webgl?.vendor ?? ''} ${fingerprint.webgl?.renderer ?? ''}`;
-    if (/SwiftShader|llvmpipe|Mesa/i.test(renderer) || (platform !== 'linux' && /Linux/i.test(renderer))) {
-      leaks.add(`WebGL=${renderer.trim()}`);
+    if (!fingerprint.webgl) {
+      leaks.add('WebGL unavailable');
+    } else {
+      const renderer = `${fingerprint.webgl.vendor} ${fingerprint.webgl.renderer}`;
+      if (/SwiftShader|llvmpipe|Mesa/i.test(renderer) || (platform !== 'linux' && /Linux/i.test(renderer))) {
+        leaks.add(`WebGL=${renderer.trim()}`);
+      }
     }
   }
   return [...leaks];
@@ -488,6 +502,7 @@ function usage() {
   node tests/fingerprint-compare.mjs run --configs stock,macos,linux,windows --targets creepjs,browserleaks-javascript --trials-per-target 1 --spacing-seconds 0 --cooldown-seconds 0 [--settle-seconds 8] --jsonl results.jsonl --report report.md
   node tests/fingerprint-compare.mjs report --jsonl results.jsonl --report report.md [--run-id ID]
 
+Configs: ${Object.keys(CONFIGS).join(', ')}. linux-headed uses Xvfb and is only available on Linux.
 Targets may be built-in names or label=https://url.`);
   process.exit(command === 'help' ? 0 : 2);
 }

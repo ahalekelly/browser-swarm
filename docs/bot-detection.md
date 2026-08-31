@@ -28,7 +28,7 @@ Where a browser isn't strictly required, the more reliable path is not to drive 
 
 Its main fork, cloakbrowser, scores the same overall headless on the same targets, differing only on which individual sites render; the upstream is slightly lighter. The persistent fingerprint seed derives GPU vendor and renderer values. Current builds removed the manual GPU flags.
 
-[`tests/fingerprint-compare.mjs`](../tests/fingerprint-compare.mjs) measures ordered `linux`, `macos`, and `windows` platform blocks with one seed. `stock` runs Playwright's bundled Chromium without fingerprint flags; install that control with `node_modules/.bin/playwright install chromium`. Each trial gets a fresh context and appends its result to JSONL before the next delay. The completed run renders a Markdown report:
+[`tests/fingerprint-compare.mjs`](../tests/fingerprint-compare.mjs) measures ordered platform and display configurations with one seed. `stock` runs Playwright's bundled Chromium without fingerprint flags; install that control with `node_modules/.bin/playwright install chromium`. `linux-headed` runs the Linux fingerprint in a 1920×1080 Xvfb display and requires `xvfb-run` and `Xvfb` on `PATH`. Each trial gets a fresh context and appends its result to JSONL before the next delay. The completed run renders a Markdown report:
 
 ```sh
 node tests/fingerprint-compare.mjs run \
