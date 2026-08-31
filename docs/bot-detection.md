@@ -32,8 +32,8 @@ Its main fork, cloakbrowser, scores the same overall headless on the same target
 
 ```sh
 node tests/fingerprint-compare.mjs run \
-  --configs macos,linux,windows \
-  --targets browserleaks-webgl,cloudflare-challenge,akamai-homedepot,datadome-leboncoin,datadome-stacked-hermes \
+  --configs macos,windows \
+  --targets cloudflare-challenge,datadome-leboncoin,datadome-stacked-hermes,perimeterx-therealreal,akamai-homedepot \
   --trials-per-target 20 \
   --spacing-seconds 15 \
   --cooldown-seconds 3600 \
@@ -42,7 +42,7 @@ node tests/fingerprint-compare.mjs run \
   --report docs/reports/fingerprint-platform.md
 ```
 
-Targets may be built-in names or `label=https://url`. Built-in protected targets: `cloudflare-challenge` (managed challenge), `akamai-homedepot`, `datadome-leboncoin` (DataDome alone; renders a few times then 403s the IP+fingerprint pair), `datadome-stacked-hermes` (DataDome behind Cloudflare). `amazon` and `google` do not challenge stock headless at low rates and only serve as render checks. The settle window defaults to eight seconds. Recover a report from an interrupted run with `node tests/fingerprint-compare.mjs report --jsonl results.jsonl --report report.md`. Reverse config order on the next day. Choose the platform with the most rendered trials on protected sites and no consistency leaks; ties go to `macos` so both hosts expose one identity.
+Targets may be built-in names or `label=https://url`. Built-in protected targets: `cloudflare-challenge` (managed challenge), `akamai-homedepot`, `datadome-leboncoin` (DataDome alone; renders a few times then 403s the IP+fingerprint pair), `datadome-stacked-hermes` (DataDome behind Cloudflare), and `perimeterx-therealreal`. `amazon` and `google` do not challenge stock headless at low rates and only serve as render checks. The settle window defaults to eight seconds. Recover a report from an interrupted run with `node tests/fingerprint-compare.mjs report --jsonl results.jsonl --report report.md`. Reverse config order on the next day. Choose the platform with the most rendered trials on protected sites and no consistency leaks; ties go to `macos` so both hosts expose one identity.
 
 Two configuration notes that apply to any patched Chromium driven by Playwright:
 

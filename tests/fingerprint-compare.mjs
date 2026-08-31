@@ -23,6 +23,7 @@ const TARGETS = {
   'akamai-homedepot': 'https://www.homedepot.com/p/DEWALT-20V-MAX-Cordless-Drill-Driver-Kit-DCD771C2/205207619',
   'datadome-leboncoin': 'https://www.leboncoin.fr/',
   'datadome-stacked-hermes': 'https://www.hermes.com/us/en/',
+  'perimeterx-therealreal': 'https://www.therealreal.com/',
 };
 const DETECTION_BODY_MARKERS = {
   akamai: /bazadebezolkohpepadr|\/akam\//i,
