@@ -71,7 +71,7 @@ Both agent families splice their operating prompt from [agent-prompt.md](agent-p
 
 ## Operating rules
 
-**Keep fan-outs to about 10 concurrent browser agents.** Each isolated context uses roughly 100–200 MB under the 2-tab cap. This is a resource guideline, not a type-allocation rule.
+**Keep fan-outs to about 10 concurrent browser agents.** Each isolated context uses roughly 100–200 MB under the 2-tab cap on light pages. Ad-heavy commercial sites spawn several site-isolated renderer processes per tab: ten agents on a marketplace reached about 96 Chromium processes and put a 16 GB host into swap, where clicks time out and launches miss the MCP client's connection timeout. Size a fan-out to free memory; on a 16 GB host that is also running other work, about 5 is a safer default for heavy sites. This is a resource guideline, not a type-allocation rule.
 
 **Keep at most 2 tabs open per context.** Close each tab as soon as its content is extracted. A 14-tab session reached about 6 GB RSS and froze the machine.
 
@@ -87,11 +87,13 @@ Both agent families splice their operating prompt from [agent-prompt.md](agent-p
 
 **Port-derived ownership.** The listener is ours only when it holds files open inside the install dir — its binary, its profile, or its lock — so a running browser stays recognizable across upgrades that move those files. Concurrent starts converge on one daemon. A foreign listener is a hard error, and `stop` refuses to kill it. Port 9377 avoids CDP's common 9222 default. The check reads `lsof`'s file tables rather than the process's command line because agent sandboxes commonly block `ps` while allowing `lsof`; without that, a sandboxed shell would misread our own daemon as foreign. Verbs that must write beside the daemon — a cold `start`, `stop` — still need an unsandboxed shell and say so when the sandbox denies the write; the blind-fire `start` against an already-running daemon works from anywhere.
 
-**Patient cold starts.** A first-run browser profile on a loaded machine takes tens of seconds to reach its port, so the supervisor gives it 45 seconds. A launcher waits 25 — inside its MCP client's connection timeout — then reports that the browser is still booting and that relaunching the agent will attach to it. Giving up never kills the browser, so the wait is paid once rather than by every launch.
+**Patient cold starts.** A first-run browser profile on a loaded machine takes tens of seconds to reach its port, so the supervisor gives it 45 seconds. A launcher waits 25 — inside its MCP client's connection timeout — then reports that the browser is still booting and that relaunching the agent will attach to it. Giving up never kills the browser, so the wait is paid once rather than by every launch. A `CONNECT_TIMEOUT` from the MCP client is a launch that missed that timeout; it also happens on a swapping host while the daemon is healthy, so `./swarm status chromium` and the log's `serve:` lines say whether the browser restarted.
 
 **Crash-aware auto-start.** Boot-scoped `chromium-daemon-state` and `firefox-daemon-state` markers say `running` while a daemon is live and `clean` after deliberate shutdown. The first attachment after an unclean death restarts the daemon and exposes the failure through a `browser_swarm_error` MCP tool; relaunching attaches normally. All startup failures use this tool, and detached supervisors survive cleanup of the sacrificed launcher.
 
 **Idle cleanup.** `src/launch.ts` begins its lease after the MCP initialize handshake, renews it on protocol activity, and suspends it during requests. Expiry closes that MCP and its isolated context. Each `serve` supervisor counts established clients and stops its browser after five idle minutes.
+
+**Session output on disk.** Each MCP session's downloads, screenshots, and per-call snapshot files go to `output/<browser>-<pid>` under the install dir. Playwright MCP persists a page snapshot after every tool call, so an output dir on tmpfs turns a full `/tmp` (systemd caps each user at 80% of it) into failed tool calls for actions that already completed. Each launch removes output dirs untouched for 24 hours.
 
 **Stable Chromium fingerprint.** One random fingerprint seed persists across Chromium restarts. All contexts on the daemon present the same device identity. Firefox has no fingerprint modifications; it is the fallback engine.
 

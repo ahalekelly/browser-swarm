@@ -1,5 +1,5 @@
-// The TypeScript launcher must supervise the pinned MCP directly and hand every
-// invocation a distinct output directory.
+// The TypeScript launcher must supervise the pinned MCP directly, hand every
+// invocation a distinct output directory, and prune stale ones.
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import fs from 'node:fs';
@@ -12,12 +12,10 @@ const browsers = [
   {
     name: 'chromium',
     endpoint: ['--cdp-endpoint', 'http://localhost:9377'],
-    output: /^\/tmp\/claude\/pwmcp-swarm-\d+$/,
   },
   {
     name: 'firefox',
     endpoint: ['--endpoint', 'ws://127.0.0.1:9378/browser-swarm'],
-    output: /^\/tmp\/claude\/pwmcp-firefox-\d+$/,
   },
 ];
 
@@ -33,11 +31,27 @@ for (const browser of browsers) {
         '--isolated',
         '--output-dir',
       ]);
-      assert.match(args.at(-1), browser.output);
+      assert.equal(path.dirname(args.at(-1)), path.join(fixture, 'output'));
+      assert.match(path.basename(args.at(-1)), new RegExp(`^${browser.name}-\\d+$`));
     }
     assert.notEqual(first.at(-1), second.at(-1), 'two invocations shared an output dir');
   });
 }
+
+test('launch removes output dirs untouched for a day', (t) => {
+  const fixture = createFixture(t);
+  const stale = path.join(fixture, 'output/chromium-1');
+  const fresh = path.join(fixture, 'output/chromium-2');
+  fs.mkdirSync(stale, { recursive: true });
+  fs.mkdirSync(fresh, { recursive: true });
+  const twoDaysAgo = Date.now() / 1000 - 2 * 24 * 60 * 60;
+  fs.utimesSync(stale, twoDaysAgo, twoDaysAgo);
+
+  launch(fixture, 'chromium', path.join(fixture, 'args'));
+
+  assert.equal(fs.existsSync(stale), false, 'stale output dir survived');
+  assert.equal(fs.existsSync(fresh), true, 'fresh output dir was pruned');
+});
 
 test('daemon startup errors complete the MCP handshake and expose one error tool', async (t) => {
   const fixture = createFixture(t);

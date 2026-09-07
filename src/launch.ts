@@ -1,11 +1,13 @@
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DaemonError, ensure, getBackend, type BrowserName } from './daemon.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const OUTPUT_ROOT = join(ROOT, 'output');
+const OUTPUT_TTL_MS = 24 * 60 * 60 * 1000;
 const IDLE_MS = 300_000;
 const TERMINATE_AFTER_MS = 1000;
 const KILL_AFTER_MS = 2000;
@@ -37,7 +39,8 @@ const mcp = join(ROOT, 'node_modules/@playwright/mcp/cli.js');
 const endpointArgs = browser! === 'chromium'
   ? ['--cdp-endpoint', backend.clientEndpoint]
   : ['--endpoint', backend.clientEndpoint];
-const output = `/tmp/claude/pwmcp-${browser! === 'chromium' ? 'swarm' : 'firefox'}-${process.pid}`;
+pruneOutput();
+const output = join(OUTPUT_ROOT, `${browser!}-${process.pid}`);
 const child = spawn(process.execPath, [
   mcp,
   ...endpointArgs,
@@ -81,6 +84,15 @@ child.on('close', (code, signal) => {
   process.exitCode = stopping ? process.exitCode : (code ?? 1);
   process.stdin.destroy();
 });
+
+function pruneOutput() {
+  mkdirSync(OUTPUT_ROOT, { recursive: true });
+  for (const entry of readdirSync(OUTPUT_ROOT)) {
+    const dir = join(OUTPUT_ROOT, entry);
+    const stats = statSync(dir, { throwIfNoEntry: false });
+    if (stats && Date.now() - stats.mtimeMs > OUTPUT_TTL_MS) rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 async function serveStartupError(message) {
   const version = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
