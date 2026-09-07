@@ -14,6 +14,7 @@ import {
   initializeRequest,
   messageQueue,
   tempFixture,
+  writeDaemonStub,
 } from './helpers.js';
 
 test('the launcher drops an attached MCP session after five idle minutes', async (t) => {
@@ -202,11 +203,7 @@ async function launchSession(t, extraEnv = {}) {
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
 
   copy('src/launch.ts', path.join(fixture, 'src/launch.ts'));
-  fs.writeFileSync(path.join(fixture, 'src/daemon.ts'), `
-export class DaemonError extends Error { exitCode = 1; }
-export async function ensure() {}
-export function getBackend() { return { clientEndpoint: 'http://localhost:9377' }; }
-`);
+  writeDaemonStub(fixture);
   copy('tests/fixtures/fake-mcp.js', path.join(fixture, 'node_modules/@playwright/mcp/cli.js'));
 
   const launcher = path.join(fixture, 'src/launch.ts');

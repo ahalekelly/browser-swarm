@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import { copy, messageQueue, repo, tempFixture } from './helpers.js';
+import { copy, messageQueue, repo, tempFixture, writeDaemonStub } from './helpers.js';
 
 const node = process.execPath;
 const playwrightMcp = path.join(repo, 'node_modules/@playwright/mcp/cli.js');
@@ -17,11 +17,7 @@ test('the lease supervisor preserves the pinned Playwright MCP wire protocol', a
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
   const launcher = path.join(fixture, 'src/launch.ts');
   copy('src/launch.ts', launcher);
-  fs.writeFileSync(path.join(fixture, 'src/daemon.ts'), `
-export class DaemonError extends Error { exitCode = 1; }
-export async function ensure() {}
-export function getBackend() { return { clientEndpoint: 'http://127.0.0.1:1' }; }
-`);
+  writeDaemonStub(fixture, 'http://127.0.0.1:1');
   const source = fs.readFileSync(launcher, 'utf8');
   fs.writeFileSync(launcher, source.replace(
     "const mcp = join(ROOT, 'node_modules/@playwright/mcp/cli.js');",

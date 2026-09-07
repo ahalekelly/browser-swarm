@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DaemonError, ensure, getBackend, type BrowserName } from './daemon.ts';
+import { CDP_ATTACH_TIMEOUT_MS, DaemonError, ensure, getBackend, type BrowserName } from './daemon.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const IDLE_MS = 300_000;
@@ -35,7 +35,7 @@ try {
 const backend = getBackend(browser!);
 const mcp = join(ROOT, 'node_modules/@playwright/mcp/cli.js');
 const endpointArgs = browser! === 'chromium'
-  ? ['--cdp-endpoint', backend.clientEndpoint]
+  ? ['--cdp-endpoint', backend.clientEndpoint, '--cdp-timeout', String(CDP_ATTACH_TIMEOUT_MS)]
   : ['--endpoint', backend.clientEndpoint];
 const output = `/tmp/claude/pwmcp-${browser! === 'chromium' ? 'swarm' : 'firefox'}-${process.pid}`;
 const child = spawn(process.execPath, [
