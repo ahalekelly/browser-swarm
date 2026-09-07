@@ -8,6 +8,8 @@ The server name is the key. Byte-identical configs share one session; nested sub
 
 The [`mcp-per-subagent`](https://github.com/ahalekelly/claude-patching) patch gives every subagent its own stdio MCP server process and stamps `CLAUDE_MCP_PER_AGENT=1` into that server's environment. BrowserSwarm therefore ships one reusable `browser-swarm` definition with server name `playwright`; every invocation gets a distinct MCP process, output directory, and isolated browser context.
 
+The patch separates sibling invocations, not a parent from its children. A browser-swarm agent that spawns browser-swarm agents shares its `playwright` session with them: the children inherit the parent's tools, the parent's turn end closes its server under them, and their next calls migrate onto whichever same-named sibling server is alive, which collapses several agents onto one context. The Claude definitions therefore withhold the `Agent` tool through `disallowedTools`.
+
 `src/launch.ts` enforces the patch as a canary. When `CLAUDECODE=1` without `CLAUDE_MCP_PER_AGENT=1`, it leaves either browser daemon untouched and exposes installation instructions through the session's sole `browser_swarm_error` MCP tool. Stock Claude Code gets a loud refusal rather than silent context sharing. Codex does not set `CLAUDECODE`, so the check does not apply there.
 
 When upstream fixes #84638, only this canary needs removal. The single reusable agent and per-invocation isolated contexts remain the intended design.
@@ -18,6 +20,8 @@ Two nested probes established the failure mode. A parent navigated to one marker
 
 - With both inline servers named `playwright`, the child's calls ran through the parent's server process and replaced the parent's page.
 - With distinct server names, each agent retained its own process, context, and marker page.
+
+A fan-out on 2026-09-06 hit the parent-child case in production. Two browser-swarm agents each spawned two or three browser-swarm children in the background instead of using their own tools. The children's first calls ran through the parents' servers; the parents' turn ends sent SIGINT to those servers 23 and 29 seconds after they connected, the children's in-flight calls failed with `Connection closed`, and their reconnects landed three siblings on one server and two on another. Agents then saw each other's tabs, and one closed a sibling's page. Children of general-purpose agents in the same run were unaffected.
 
 Daemon isolation was not the source. One MCP connection gets one isolated context, and pages opened by other connections are invisible. Tabs an agent did not open therefore indicate broken MCP process isolation; the agent prompt treats that as a bug and tells the worker to stop.
 
