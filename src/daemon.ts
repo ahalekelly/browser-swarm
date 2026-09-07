@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { get } from 'node:http';
 import { createConnection } from 'node:net';
+import { cpus, loadavg } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -19,6 +20,12 @@ const POLL_MS = 500;
 // costs every later agent too.
 const ATTACH_TIMEOUT_MS = 25_000;
 const BOOT_TIMEOUT_MS = 120_000;
+// Playwright's CDP connect waits for every page already open in the shared
+// browser to initialize, and every browser process runs at low priority, so
+// a new session's attach grows with attached agents and host load. The MCP
+// client's tool-call timeout is effectively unbounded, so waiting costs only
+// time; Playwright MCP's own 30 s default fails on a saturated host.
+export const CDP_ATTACH_TIMEOUT_MS = 120_000;
 const KILL_AFTER_MS = 2000;
 const FIREFOX_ENDPOINT = 'ws://127.0.0.1:9378/browser-swarm';
 
@@ -320,7 +327,14 @@ async function status(backend: Backend): Promise<number> {
   }
 
   const { chromium } = await import('playwright-core');
-  const browser = await chromium.connectOverCDP(backend.clientEndpoint, { timeout: 5000 });
+  let browser;
+  try {
+    browser = await chromium.connectOverCDP(backend.clientEndpoint, { timeout: 5000 });
+  } catch (error) {
+    if (error.name !== 'TimeoutError') throw error;
+    const [load] = loadavg();
+    throw new DaemonError(`CDP attach did not finish within 5s — the browser answers HTTP and has attached clients, so it is busy rather than dead (load average ${load.toFixed(1)} on ${cpus().length} CPUs; agents wait up to ${seconds(CDP_ATTACH_TIMEOUT_MS)} for the same attach)`);
+  }
   const contexts = browser.contexts();
   console.error(`contexts: ${contexts.length}`);
   for (const context of contexts) console.error(`  pages: ${context.pages().map((page) => page.url()).join(', ') || '(none)'}`);

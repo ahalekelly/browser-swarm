@@ -65,21 +65,28 @@ export function writeDaemonFixture(fixture, replacements = []) {
   return daemon;
 }
 
-export function createLauncherFixture() {
-  const fixture = tempFixture('browser-swarm-launcher-');
-  copy('src/launch.ts', path.join(fixture, 'src/launch.ts'));
-  copy('package.json', path.join(fixture, 'package.json'));
+// launch.ts imports these from daemon.ts; the stub answers without a daemon.
+export function writeDaemonStub(fixture, chromiumEndpoint = 'http://localhost:9377') {
+  fs.mkdirSync(path.join(fixture, 'src'), { recursive: true });
   fs.writeFileSync(path.join(fixture, 'src/daemon.ts'), `
 import { writeFileSync } from 'node:fs';
+export const CDP_ATTACH_TIMEOUT_MS = 120_000;
 export class DaemonError extends Error { exitCode = 1; }
 export function getBackend(browserName) {
-  return { clientEndpoint: browserName === 'chromium' ? 'http://localhost:9377' : 'ws://127.0.0.1:9378/browser-swarm' };
+  return { clientEndpoint: browserName === 'chromium' ? ${JSON.stringify(chromiumEndpoint)} : 'ws://127.0.0.1:9378/browser-swarm' };
 }
 export async function ensure() {
   if (process.env.DAEMON_ERROR) throw new DaemonError(process.env.DAEMON_ERROR);
   if (process.env.DAEMON_TOUCH_LOG) writeFileSync(process.env.DAEMON_TOUCH_LOG, 'touched');
 }
 `);
+}
+
+export function createLauncherFixture() {
+  const fixture = tempFixture('browser-swarm-launcher-');
+  copy('src/launch.ts', path.join(fixture, 'src/launch.ts'));
+  copy('package.json', path.join(fixture, 'package.json'));
+  writeDaemonStub(fixture);
   copy('tests/fixtures/fake-mcp.js', path.join(fixture, 'node_modules/@playwright/mcp/cli.js'));
   return fixture;
 }

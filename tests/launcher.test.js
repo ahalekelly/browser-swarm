@@ -11,7 +11,7 @@ const version = JSON.parse(fs.readFileSync(new URL('../package.json', import.met
 const browsers = [
   {
     name: 'chromium',
-    endpoint: ['--cdp-endpoint', 'http://localhost:9377'],
+    endpoint: ['--cdp-endpoint', 'http://localhost:9377', '--cdp-timeout', '120000'],
     output: /^\/tmp\/claude\/pwmcp-swarm-\d+$/,
   },
   {
