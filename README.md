@@ -63,7 +63,7 @@ npm run test:firefox
 
 Claude agents can run concurrently because the local [`mcp-per-subagent`](https://github.com/ahalekelly/claude-patching) patch gives each subagent its own MCP server process. `src/launch.ts` checks the patch canary before touching a daemon; an unpatched Claude Code session fails rather than sharing a browser session. [The bug record](docs/claude-code-mcp-dedup.md) explains why.
 
-Both definitions withhold the `Agent` tool. The patch separates siblings, not a parent from its children: a browser-swarm agent that spawns browser-swarm agents shares its MCP session with them and closes it under them when its turn ends.
+Both definitions withhold the `Agent` and `Skill` tools. The patch separates siblings, not a parent from its children: a browser-swarm agent that spawns browser-swarm agents shares its MCP session with them and closes it under them when its turn ends. Skills are orchestrator playbooks that tell their reader to delegate; a worker that loads one abandons its browser task.
 
 [`codex-agents/`](codex-agents/) generates one reusable `browser-swarm` definition. The canary only applies when `CLAUDECODE=1`, so Codex launches pass unchanged.
 

@@ -2,7 +2,7 @@
 name: __NAME__
 description: __DESCRIPTION__
 model: sonnet
-disallowedTools: Agent
+disallowedTools: Agent, Skill
 mcpServers:
   - __SERVER_NAME__:
       type: stdio

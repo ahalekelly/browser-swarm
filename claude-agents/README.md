@@ -4,7 +4,7 @@
 ./install-agents.sh
 ```
 
-Generates `browser-swarm` and `browser-swarm-firefox` in `~/.claude/agents/`, with this checkout's path and active Node.js path substituted into the templates. Both splice in the shared system prompt from [agent-prompt.md](../agent-prompt.md). Run the installer again after moving the checkout.
+Generates `browser-swarm` and `browser-swarm-firefox` in `~/.claude/agents/`, with this checkout's path and active Node.js path substituted into the templates. Both splice in the shared system prompt from [agent-prompt.md](../agent-prompt.md). Rerun the installer after moving the checkout or changing the template or `agent-prompt.md`: the definitions are generated copies.
 
 The installer removes stale numbered `browser-swarm-1` … `browser-swarm-10` files. The local Claude Code [`mcp-per-subagent`](https://github.com/ahalekelly/claude-patching) patch makes one reusable definition safe for concurrent subagents; the launcher refuses unpatched sessions. See [Claude Code inline MCP server sharing](../docs/claude-code-mcp-dedup.md).
 
