@@ -1,32 +1,17 @@
 #!/bin/bash
-# One-command install, runnable without a checkout:
-#   npx browser-swarm
-# Clones the repo to ~/.browser-swarm (or fast-forwards an existing clone),
-# installs the pinned MCP dependencies and the checksum-verified browser, and
-# generates the Claude Code and Codex agent definitions. It installs a real clone
-# rather than running from npx's cache because the agent definitions embed
-# absolute paths that must stay valid: the cache is content-addressed,
-# prunable, and re-fetched — everything a definition must not point into.
-# From an existing checkout, skip this and run the component scripts directly.
+# Install or update BrowserSwarm. Clone the repo, then run this script inside
+# the clone: it fast-forwards the checkout, installs the pinned MCP
+# dependencies and the checksum-verified browsers, and generates the Claude Code
+# and Codex agent definitions. Those definitions embed absolute paths into this
+# checkout, so the install lives in a real clone that stays put.
 set -euo pipefail
 case "$(uname -sm)" in
   "Darwin arm64"|"Linux x86_64") ;;
   *) echo "ERROR: BrowserSwarm supports Darwin arm64 and Linux x86_64" >&2; exit 1 ;;
 esac
-TARGET="$HOME/.browser-swarm"
-REPO="https://github.com/ahalekelly/browser-swarm.git"
+cd "$(dirname "$0")"
 
-if [ -d "$TARGET/.git" ]; then
-  echo "updating existing install at $TARGET"
-  git -C "$TARGET" pull --ff-only
-elif [ -e "$TARGET" ]; then
-  echo "ERROR: $TARGET exists but is not a git clone — move it aside and rerun" >&2
-  exit 1
-else
-  git clone "$REPO" "$TARGET"
-fi
-
-cd "$TARGET"
+git pull --ff-only
 npm ci
 ./install-fingerprint-chromium.sh
 ./install-playwright-firefox.sh
@@ -34,6 +19,6 @@ npm ci
 ./codex-agents/install-agents.sh
 
 echo
-echo "BrowserSwarm installed at $TARGET"
+echo "BrowserSwarm installed at $PWD"
 echo "The shared browser auto-starts when a swarm agent runs; manage it with:"
-echo "  $TARGET/swarm start|status|stop [chromium|firefox]"
+echo "  $PWD/swarm start|status|stop [chromium|firefox]"

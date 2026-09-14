@@ -9,18 +9,12 @@ Supported hosts: macOS on Apple silicon and Linux on x86_64. Node.js 22.18 or ne
 ## Install
 
 ```sh
-npx browser-swarm
+git clone https://github.com/ahalekelly/browser-swarm.git ~/.browser-swarm
+cd ~/.browser-swarm
+./install.sh
 ```
 
-The installer clones the repo to `~/.browser-swarm`, runs `npm ci`, installs both pinned browsers, and generates Claude Code and Codex agent definitions. The Linux installer needs `sudo` once to install Chromium's AppArmor profile. From a checkout, run the pieces directly:
-
-```sh
-npm ci
-./install-fingerprint-chromium.sh
-./install-playwright-firefox.sh
-./claude-agents/install-agents.sh
-./codex-agents/install-agents.sh
-```
+`install.sh` fast-forwards the checkout, runs `npm ci`, installs both pinned browsers, and generates Claude Code and Codex agent definitions. Run it again in the clone to update. The Linux installer needs `sudo` once to install Chromium's AppArmor profile. The generated agent definitions point at absolute paths inside the clone, so leave it where it is.
 
 The fingerprint-Chromium archive has a fixed SHA-256. The Playwright package checksum in `package-lock.json` pins its browser registry, and `install-playwright-firefox.sh` verifies the expected Playwright version, Firefox revision, and installed executable.
 

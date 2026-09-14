@@ -1,26 +1,21 @@
 {
   "name": "browser-swarm",
   "version": "0.2.0",
-  "description": "BrowserSwarm — one shared headless browser for every agent in a fan-out. npx installer.",
+  "description": "BrowserSwarm — one shared headless browser for every agent in a fan-out.",
   "license": "MIT",
+  "private": true,
   "type": "module",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ahalekelly/browser-swarm.git"
   },
-  "os": ["darwin", "linux"],
-  "cpu": ["arm64", "x64"],
   "engines": {
     "node": ">=22.18"
-  },
-  "bin": {
-    "browser-swarm": "./install.sh"
   },
   "scripts": {
     "test": "node --test --test-timeout=60000 tests/*.test.js",
     "test:firefox": "node --test --test-timeout=120000 tests/firefox/*.test.js"
   },
-  "files": ["install.sh"],
   "devDependencies": {
     "@playwright/mcp": "^0.0.79"
   }
