@@ -10,7 +10,7 @@ The [`mcp-per-subagent`](https://github.com/ahalekelly/claude-patching) patch gi
 
 The patch separates sibling invocations, not a parent from its children. A browser-swarm agent that spawns browser-swarm agents shares its `playwright` session with them: the children inherit the parent's tools, the parent's turn end closes its server under them, and their next calls migrate onto whichever same-named sibling server is alive, which collapses several agents onto one context. The Claude definitions therefore withhold the `Agent` tool through `disallowedTools`.
 
-`src/launch.ts` enforces the patch as a canary. When `CLAUDECODE=1` without `CLAUDE_MCP_PER_AGENT=1`, it leaves either browser daemon untouched and exposes installation instructions through the session's sole `browser_swarm_error` MCP tool. Stock Claude Code gets a loud refusal rather than silent context sharing. Codex does not set `CLAUDECODE`, so the check does not apply there.
+`src/launch.ts` enforces the patch as a canary. When `CLAUDECODE=1` without `CLAUDE_MCP_PER_AGENT=1`, it leaves either browser daemon untouched and exposes an error naming the usual causes through the session's sole `browser_swarm_error` MCP tool. Stock Claude Code gets a loud refusal rather than silent context sharing. Codex does not set `CLAUDECODE`, so the check does not apply there.
 
 When upstream fixes #84638, only this canary needs removal. The single reusable agent and per-invocation isolated contexts remain the intended design.
 
