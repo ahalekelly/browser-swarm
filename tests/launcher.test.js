@@ -107,13 +107,13 @@ test('Claude canary exposes an error tool before touching the daemon', async (t)
   session.send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const listed = await session.responses.next((message) => message.id === 2);
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['browser_swarm_error']);
-  assert.match(listed.result.tools[0].description, /requires patched Claude Code/);
+  assert.match(listed.result.tools[0].description, /without the mcp-per-subagent patch/);
 
   const closed = once(session.child, 'close');
   session.child.stdin.end();
   const [code] = await closed;
   assert.equal(code, 1);
-  assert.match(session.stderr(), /requires patched Claude Code/);
+  assert.match(session.stderr(), /without the mcp-per-subagent patch/);
   assert.match(session.stderr(), /claude-patching/);
   assert.match(session.stderr(), /84638/);
   assert.equal(fs.existsSync(daemonTouch), false, 'canary touched the daemon');

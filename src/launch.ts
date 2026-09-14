@@ -13,7 +13,7 @@ const KILL_AFTER_MS = 2000;
 let browser: BrowserName;
 try {
   if (process.env.CLAUDECODE === '1' && process.env.CLAUDE_MCP_PER_AGENT !== '1') {
-    throw new DaemonError('BrowserSwarm requires patched Claude Code. This unpatched session shares same-named inline MCP servers between subagents, which makes agents share one browser session. Install the mcp-per-subagent patch from https://github.com/ahalekelly/claude-patching and see https://github.com/anthropics/claude-code/issues/84638.');
+    throw new DaemonError('This Claude Code session runs a binary without the mcp-per-subagent patch: the CLAUDE_MCP_PER_AGENT canary is missing, so same-named inline MCP servers are shared between subagents and browser agents would fight over one browser session (https://github.com/anthropics/claude-code/issues/84638). Usually the patch has not been ported to this Claude Code version yet, or the session was launched by a tool that bypasses the patched-binary launcher (https://github.com/ahalekelly/claude-patching). Nothing in this session can fix it; only the user can');
   }
 
   browser = process.argv[2] as BrowserName;
