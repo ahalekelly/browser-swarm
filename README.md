@@ -59,7 +59,7 @@ Claude agents can run concurrently because the local [`mcp-per-subagent`](https:
 
 Both definitions withhold the `Agent` tool. The patch separates siblings, not a parent from its children: a browser-swarm agent that spawns browser-swarm agents shares its MCP session with them and closes it under them when its turn ends.
 
-[`codex-agents/`](codex-agents/) generates one reusable `browser-swarm` definition. The canary only applies when `CLAUDECODE=1`, so Codex launches pass unchanged.
+[`codex-agents/`](codex-agents/) requires the Codex CLI, registers Playwright in the parent Codex configuration, and generates one reusable `browser-swarm` definition. Browser tools are inherited by all children; each session launches its own MCP process. Start a new Codex session after installation. The canary only applies when `CLAUDECODE=1`, so Codex launches pass unchanged.
 
 Both agent families splice their operating prompt from [agent-prompt.md](agent-prompt.md).
 
