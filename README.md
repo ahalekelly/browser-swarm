@@ -2,7 +2,7 @@
 
 BrowserSwarm gives concurrent agents isolated browser contexts on two shared headless browser processes: fingerprint-Chromium by default and Firefox as a fallback for sites that block Chromium. A fan-out pays for contexts instead of full browser processes.
 
-The standard pinned [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) provides the tools and wire protocol. A transparent TypeScript stdio supervisor gives each MCP session a five-minute inactivity lease. The TypeScript daemon runtime owns browser startup, crash reporting, idle shutdown, and safe port ownership.
+A controller service owns the browsers and every context. Agents open and drive a context from the shell with the `swarm` CLI, so nothing browser-related runs inside the agent harness and concurrent agents have nothing to share. The standard pinned [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) supplies the tools; each context is one of its processes, started and owned by the controller.
 
 Supported hosts: macOS on Apple silicon and Linux on x86_64. Node.js 22.18 or newer is required for direct TypeScript execution.
 
@@ -14,54 +14,54 @@ cd ~/.browser-swarm
 ./install.sh
 ```
 
-`install.sh` fast-forwards the checkout, runs `npm ci`, installs both pinned browsers, and generates Claude Code and Codex agent definitions. Run it again in the clone to update. The Linux installer needs `sudo` once to install Chromium's AppArmor profile. The generated agent definitions point at absolute paths inside the clone, so leave it where it is.
+`install.sh` fast-forwards the checkout, runs `npm ci`, installs both pinned browsers, installs and starts the controller service, and generates the Claude Code and Codex agent definitions. Run it again in the clone to update. The Linux installer needs `sudo` once to install Chromium's AppArmor profile. The generated agent definitions embed absolute paths into the clone, so leave it where it is.
 
 The fingerprint-Chromium archive has a fixed SHA-256. The Playwright package checksum in `package-lock.json` pins its browser registry, and `install-playwright-firefox.sh` verifies the expected Playwright version, Firefox revision, and installed executable.
 
 ## Use
 
-Agents start the required daemon automatically. Operators can inspect either backend:
-
 ```sh
-./swarm start chromium
-./swarm status chromium
-./swarm stop chromium
-
-./swarm start firefox
-./swarm status firefox
-./swarm stop firefox
+id=$(./swarm open)                                    # ./swarm open firefox for the fallback
+./swarm "$id" navigate '{"url":"https://example.com"}'
+./swarm "$id" snapshot
+./swarm "$id" close
 ```
 
-Chromium MCP clients attach with `--cdp-endpoint http://localhost:9377 --isolated`. Firefox clients attach with `--endpoint ws://127.0.0.1:9378/browser-swarm --isolated`.
+`open` prints the context id on stdout and its output directory on stderr, so `$( )` captures the id alone. Tool names drop Playwright MCP's `browser_` prefix. `./swarm "$id" tools` lists them with one line of description each, and `./swarm "$id" help <tool>` prints one tool's schema, so a session never needs every schema up front. Pass `-` in place of the JSON arguments to read them from stdin, which avoids shell quoting trouble for long text.
 
-`--isolated` is mandatory. Without it, clients share a default context and fight over tabs.
+Exit codes: 0 success, 1 the tool reported an error, 2 usage, 3 controller or transport failure, 4 unknown or expired context.
 
-Browser processes and loopback tests must run outside restrictive sandboxes. Run the fake-backed default suite with:
+`./swarm ls` lists open contexts with age, idle time, output dir and page URLs. `./swarm status` reports each browser and the last crash.
 
-```sh
-npm test
-```
-
-Run the real Firefox isolation gate after installing Firefox:
+The controller runs as a user service, so starting and stopping it belongs to the service manager:
 
 ```sh
-npm run test:firefox
+systemctl --user restart browser-swarm          # Linux; journalctl --user -u browser-swarm for logs
+launchctl kickstart -k gui/$UID/com.browser-swarm.controller   # macOS; logs in controller.log
 ```
+
+## Tests
+
+```sh
+npm test               # fake browser and fake Playwright MCP; no browser starts
+npm run test:chromium  # the real gate on fingerprint-Chromium
+npm run test:firefox   # the real gate on Playwright Firefox
+```
+
+Every suite builds a private fixture — a copy of `src/` with its ports, output root and five-minute timers rewritten — so nothing touches the machine-wide controller. The real gates start browsers and need an ordinary shell; inside an agent sandbox Chromium exits during startup.
 
 ## Agent definitions
 
-[`claude-agents/`](claude-agents/) generates two definitions:
+[`claude-agents/`](claude-agents/) generates two definitions in `~/.claude/agents/`:
 
 - `browser-swarm`: fingerprint-Chromium for normal browser work.
 - `browser-swarm-firefox`: Firefox for sites confirmed to block Chromium.
 
-Claude agents can run concurrently because the local [`mcp-per-subagent`](https://github.com/ahalekelly/claude-patching) patch gives each subagent its own MCP server process. `src/launch.ts` checks the patch canary before touching a daemon; an unpatched Claude Code session fails rather than sharing a browser session. [The bug record](docs/claude-code-mcp-dedup.md) explains why.
+They carry no MCP server. The agent runs `swarm` from Bash, which is why any number of them can work at once: [claude-code#84638](https://github.com/anthropics/claude-code/issues/84638) makes stock Claude Code route concurrent subagents that declare the same inline MCP server through one session, and the first subagent to finish closes it under its siblings. Nothing per-agent runs in the harness now, so there is nothing for the harness to share. Both definitions still withhold the `Agent` tool: a browser task is cheap to do and expensive to delegate.
 
-Both definitions withhold the `Agent` tool. The patch separates siblings, not a parent from its children: a browser-swarm agent that spawns browser-swarm agents shares its MCP session with them and closes it under them when its turn ends.
+[`codex-agents/`](codex-agents/) generates one `browser-swarm` definition and registers `swarm mcp chromium` as the `playwright` MCP server. Codex's command sandbox blocks all network access, so its agents cannot call the CLI; the adapter owns one context per MCP session and forwards tool calls to the controller. Start a new Codex session after installation.
 
-[`codex-agents/`](codex-agents/) requires the Codex CLI, registers Playwright in the parent Codex configuration, and generates one reusable `browser-swarm` definition. Browser tools are inherited by all children; each session launches its own MCP process. Start a new Codex session after installation. The canary only applies when `CLAUDECODE=1`, so Codex launches pass unchanged.
-
-Both agent families splice their operating prompt from [agent-prompt.md](agent-prompt.md).
+Both families splice [agent-prompt.md](agent-prompt.md) and the harness's own tooling paragraph.
 
 ## Operating rules
 
@@ -71,28 +71,31 @@ Both agent families splice their operating prompt from [agent-prompt.md](agent-p
 
 **Reach for a browser last.** Prefer a purpose-built API, then web search. Use a browser for forms, configurators, authenticated flows, and sites that starve cheaper paths.
 
-**Relaunch after an idle disconnect.** An initialized MCP session closes after five minutes without activity. An in-flight request suspends its lease. A fresh agent gets a fresh isolated context.
+**Close contexts, not the service.** `swarm <id> close` is the end of an agent's work. The controller stays up; it stops a browser five minutes after its last context goes away and starts it again on the next `open`.
 
-**Do not stop a daemon after a fan-out.** Another session may still use it, so `stop` refuses while clients are attached (`--force` overrides). Its supervisor stops it after ten consecutive 30-second polls with no clients.
+**Relaunch after an idle disconnect.** A context is released after five minutes with no calls; in-flight work suspends that lease. A fresh agent gets a fresh isolated context.
 
 ## How it works
 
-**One lifecycle, two backends.** One detached `serve` supervisor per backend owns crash state and idle shutdown. Chromium's supervisor runs bare fingerprint-Chromium on CDP port 9377 at low priority: `taskpolicy -c utility` on macOS and `nice -n 10` on Linux. Firefox's supervisor runs Playwright's managed build through plain `firefox.launchServer()` at `ws://127.0.0.1:9378/browser-swarm`. Plain `launchServer` is load-bearing: shared-browser mode disables per-client context isolation. Both backends launch muted, so pages never play audio through the machine's speakers.
+**One service, two backends.** The controller listens on `127.0.0.1:9387` and launches a browser on the first `open` for that backend: fingerprint-Chromium on CDP port 9377 at low priority (`taskpolicy -c utility` on macOS, `nice -n 10` on Linux), and Playwright's managed Firefox through `firefox.launchServer()` at `ws://127.0.0.1:9378/browser-swarm`. Plain `launchServer` is load-bearing: shared-browser mode disables per-client context isolation. Both launch muted, so pages never play audio through the machine's speakers. A cold first-run profile gets 120 seconds to answer, and a browser that dies takes its contexts with it — the next `open` relaunches it and `swarm status` reports the crash.
 
-**Port-derived ownership.** The listener is ours only when it holds files open inside the install dir — its binary, its profile, or its lock — so a running browser stays recognizable across upgrades that move those files. Concurrent starts converge on one daemon. A foreign listener is a hard error, and `stop` refuses to kill it. Port 9377 avoids CDP's common 9222 default. The check reads `lsof`'s file tables rather than the process's command line because agent sandboxes commonly block `ps` while allowing `lsof`; without that, a sandboxed shell would misread our own daemon as foreign. Verbs that must write beside the daemon — a cold `start`, `stop` — still need an unsandboxed shell and say so when the sandbox denies the write; the blind-fire `start` against an already-running daemon works from anywhere.
+**Contexts are child processes.** Each context is a `@playwright/mcp` process with `--isolated`, its own output dir and the backend's endpoint. The pinned 0.0.79 cannot be embedded in a long-lived process: every initialized context installs a process-wide `unhandledRejection` listener, its `browser.once('disconnected')` listeners outlive cleanup, and `server.close()` leaves a supplied context open. A child process per context is also exactly the isolation the real gates test.
 
-**Patient cold starts.** A first-run browser profile on a loaded machine takes tens of seconds to reach its port, so the supervisor gives it 45 seconds. A launcher waits 25 — inside its MCP client's connection timeout — then reports that the browser is still booting and that relaunching the agent will attach to it. Giving up never kills the browser, so the wait is paid once rather than by every launch.
+**Serialization, leases and deadlines.** Calls to one context run one at a time because Playwright MCP mutates selected-tab and running-tool state per call; different contexts run concurrently. A call has a 120-second deadline, after which the child is killed and the context is reported lost. A context's lease renews when a call finishes, so in-flight work and a disconnected client never make live work look idle. Five idle minutes closes the child and keeps the output dir.
 
-**Crash-aware auto-start.** Boot-scoped `chromium-daemon-state` and `firefox-daemon-state` markers say `running` while a daemon is live and `clean` after deliberate shutdown. The first attachment after an unclean death restarts the daemon and exposes the failure through a `browser_swarm_error` MCP tool; relaunching attaches normally. All startup failures use this tool, and detached supervisors survive cleanup of the sacrificed launcher.
+**Reaching the controller from a sandbox.** Inside Claude Code's Linux bash sandbox, loopback is a separate network namespace and unix-socket `connect` is blocked, so a direct request cannot reach the host. The sandbox's HTTP proxy does, when the client ignores `no_proxy`. The CLI switches to that proxy only when `CLAUDE_CODE_HOST_HTTP_PROXY_PORT` is set — `http_proxy` alone would also be set by a corporate proxy, whose loopback is a different machine's. Proxy credentials are percent-decoded into Basic auth for the proxy, never forwarded to the controller and never printed in an error. The proxy reaches an existing listener only, which is why the controller is a service rather than something an agent starts.
 
-**Idle cleanup.** `src/launch.ts` begins its lease after the MCP initialize handshake, renews it on protocol activity, and suspends it during requests. Expiry closes that MCP and its isolated context. Each `serve` supervisor counts established clients and stops its browser after five idle minutes.
+**The API's security boundary.** Loopback binding is not one: a page the swarm browser loads can reach port 9387. The controller writes a fresh random token to `controller-token` (mode 600) once it is listening, and rejects any request without it, with an unexpected `Host`, without `content-type: application/json`, with a body over 1 MiB, or outside its five routes. The token file appearing is also what tells a client the controller is ready.
 
-**Stable Chromium fingerprint.** One random fingerprint seed persists across Chromium restarts. All contexts on the daemon present the same device identity. Firefox has no fingerprint modifications; it is the fallback engine.
+**Two tools are withheld.** `browser_run_code_unsafe` executes arbitrary JavaScript in the Playwright process and is RCE-equivalent; `browser_close` disposes backend state without closing the supplied context, so it would collide with `swarm <id> close`. `@playwright/mcp` 0.0.79 filters tools only by capability and both are `core` tools, so the controller drops them from `tools/list` and refuses them in `tools/call`. The Codex adapter adds back a `browser_close` that means "close this context".
+
+**Artifacts.** Each context gets `/tmp/claude/swarm/<id>/` as both its output dir and its working directory, which is the workspace root Playwright MCP restricts file access to. Results link an artifact relative to that root (`[screenshot](./page-….png)`); 0.0.79 has no absolute-path mode, so the prompt tells agents to resolve links against the output dir. Screenshots use `imageResponses: 'omit'`, so the result is a path an agent reads with its own image-capable tool. Output dirs outlive their contexts, and a result over 200 lines is saved there in full and previewed in the first 100 lines. Context ids are 16 hex characters because those dirs make ids collide over the controller's whole history, not just among live contexts.
+
+**Stable Chromium fingerprint.** One random fingerprint seed persists across Chromium restarts, so all contexts present the same device identity. Firefox has no fingerprint modifications; it is the fallback engine.
 
 ## Docs
 
 - [Bot detection and browser engines](docs/bot-detection.md)
-- [Claude Code inline MCP server sharing](docs/claude-code-mcp-dedup.md)
 
 ## License
 
