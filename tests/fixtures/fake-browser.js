@@ -1,13 +1,11 @@
 #!/usr/bin/env node
-// Stand-in for fingerprint-chromium in daemon tests: answers CDP's
-// /json/version on the given port and keeps running until killed. It holds a
-// file inside the passed profile dir open for its whole lifetime — real
-// Chromium always does — which is what the daemon's port-derived ownership
-// check looks for. FAKE_BROWSER_STARTUP_MS stands in for a cold real launch,
-// which opens its port long after the process starts.
-import fs from 'node:fs';
+// Stand-in for fingerprint-chromium in controller tests: answers CDP's
+// /json/version on the given port and keeps running until killed.
+// /json/connections reports how many other sockets are attached, which is how
+// tests see contexts appear and disappear from the browser's side.
+// FAKE_BROWSER_STARTUP_MS stands in for a cold real launch, which opens its
+// port long after the process starts.
 import http from 'node:http';
-import path from 'node:path';
 
 const flag = (name) => {
   const argument = process.argv.find((candidate) => candidate.startsWith(`--${name}=`));
@@ -16,10 +14,6 @@ const flag = (name) => {
 };
 
 const port = Number(flag('remote-debugging-port'));
-const profile = flag('user-data-dir');
-
-fs.mkdirSync(profile, { recursive: true });
-fs.openSync(path.join(profile, 'FakeBrowserLock'), 'w'); // held open until exit
 
 const server = http.createServer((request, response) => {
   response.setHeader('content-type', 'application/json');
@@ -28,6 +22,12 @@ const server = http.createServer((request, response) => {
       Browser: 'FakeChromium/1',
       webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/test`,
     }));
+    return;
+  }
+  if (request.url === '/json/connections') {
+    server.getConnections((error, count) => {
+      response.end(JSON.stringify({ connections: (count ?? 1) - 1 }));
+    });
     return;
   }
   response.statusCode = 404;

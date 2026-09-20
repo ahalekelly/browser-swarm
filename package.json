@@ -14,9 +14,11 @@
   },
   "scripts": {
     "test": "node --test --test-timeout=60000 tests/*.test.js",
-    "test:firefox": "node --test --test-timeout=120000 tests/firefox/*.test.js"
+    "test:chromium": "node --test --test-timeout=180000 tests/chromium/*.test.js",
+    "test:firefox": "node --test --test-timeout=180000 tests/firefox/*.test.js"
   },
-  "devDependencies": {
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@playwright/mcp": "^0.0.79"
   }
 }

@@ -1,13 +1,9 @@
 node_modules/
 *.log
 .DS_Store
+.claude/
 fingerprint-chromium/
 chromium-browser-profile/
-chromium-browser.log
-chromium-daemon-state
-fingerprint-seed
 firefox-browser-profile/
-firefox-browser.log
-firefox-daemon-state
-.playwright-mcp/
-.claude/
+fingerprint-seed
+controller-token
