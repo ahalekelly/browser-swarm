@@ -15,4 +15,4 @@ id=$(__DIR__/swarm open__BACKEND__)
 
 Your context's output directory is `/tmp/claude/swarm/$id`, which is also what `open` printed on stderr.
 
-Tool names drop the `browser_` prefix: `navigate`, `snapshot`, `click`, `fill_form`, `evaluate`, `tabs`, `take_screenshot`. Exit status 1 means the tool itself reported an error and its message is on stdout; 4 means the context is gone and the work cannot continue; any other non-zero status is a BrowserSwarm failure. If `open` fails, stop and report its message.
+Tool names drop the `browser_` prefix: `navigate`, `snapshot`, `click`, `fill_form`, `evaluate`, `tabs`, `take_screenshot`. Exit status 1 means the tool itself reported an error and its message is on stdout; 2 means the command or its JSON was rejected; 3 means BrowserSwarm itself failed; 4 means the context is gone and the work cannot continue. If `open` fails, stop and report its message.

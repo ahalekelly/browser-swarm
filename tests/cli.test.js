@@ -71,7 +71,7 @@ test('tools and help describe what a context can do', async (t) => {
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /^navigate$/m);
   assert.match(help.stdout, /"required": \[\n\s+"url"\n\s+\]/);
-  assert.equal(swarm(fixture, [id, 'help', 'nonsense']).status, 3);
+  assert.equal(swarm(fixture, [id, 'help', 'nonsense']).status, 2);
 });
 
 test('a large result is previewed with a path to the full text', async (t) => {
@@ -115,6 +115,7 @@ test('usage mistakes exit 2 and unknown contexts exit 4', async (t) => {
   assert.equal(badJson.status, 2);
   assert.match(badJson.stderr, /not valid JSON/);
   assert.equal(swarm(fixture, ['c0123456789abcdef', 'tabs', '{}']).status, 4);
+  assert.equal(swarm(fixture, [swarm(fixture, ['open']).stdout.trim(), 'nonsense']).status, 2);
 });
 
 test('an unreachable controller exits 3 and names the service command', async (t) => {

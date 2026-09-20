@@ -25,7 +25,9 @@ async function main(): Promise<void> {
     await run(process.argv.slice(2));
   } catch (error) {
     if (error instanceof UsageError) return fail(2, `${error.message}\n\n${USAGE}`);
-    if (error instanceof ApiError) return fail(error.status === 404 || error.status === 410 ? 4 : 3, error.message);
+    // 400 is the controller rejecting what the caller asked for, which is a
+    // usage mistake; 404 and 410 mean the context is gone.
+    if (error instanceof ApiError) return fail(exitFor(error.status), error.message);
     throw error;
   }
 }
@@ -100,7 +102,7 @@ async function printTools(id: string): Promise<void> {
 async function printToolHelp(id: string, name: string): Promise<void> {
   const { tools } = await api('POST', `/contexts/${id}/tools`) as { tools: Tool[] };
   const tool = tools.find((candidate) => candidate.name === full(name));
-  if (!tool) throw new ApiError(400, `no tool ${bare(name)}; run \`swarm ${id} tools\``);
+  if (!tool) throw new UsageError(`no tool ${bare(name)}; run \`swarm ${id} tools\``);
   console.log(`${bare(tool.name)}\n${tool.description ?? ''}\n`);
   console.log(JSON.stringify(tool.inputSchema, null, 2));
 }
@@ -135,6 +137,11 @@ type ContextInfo = { id: string; backend: string; ageSeconds: number; idleSecond
 type BrowserInfo = { backend: string; running: boolean; pid: number | null; upSeconds: number | null; contexts: number; lastCrash: string | null };
 type Tool = { name: string; description?: string; inputSchema: unknown };
 type CallResult = { text: string; isError: boolean; outputDir: string; savedPath?: string };
+
+function exitFor(status: number): number {
+  if (status === 404 || status === 410) return 4;
+  return status === 400 ? 2 : 3;
+}
 
 function bare(name: string): string {
   return name.replace(/^browser_/, '');

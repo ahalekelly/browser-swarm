@@ -332,9 +332,10 @@ async function enqueue<T>(context: Context, renewLease: boolean, task: () => Pro
 }
 
 async function callTool(id: string, name: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean; outputDir: string; savedPath?: string }> {
-  if (BLOCKED_TOOLS.has(name)) {
-    throw new ApiError(400, `${name} is not available through BrowserSwarm; close the context with \`swarm ${id} close\``);
+  if (name === 'browser_close') {
+    throw new ApiError(400, `browser_close is not available through BrowserSwarm; close the context with \`swarm ${id} close\``);
   }
+  if (BLOCKED_TOOLS.has(name)) throw new ApiError(400, `${name} is not available through BrowserSwarm`);
   const context = liveContext(id);
   const result = await enqueue(context, true, async () => {
     try {
@@ -553,8 +554,10 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// Local time, because `swarm status` prints the last crash next to a wall
+// clock. sv-SE is the locale whose short format is already ISO-shaped.
 function timestamp(): string {
-  return new Date().toISOString().replace('T', ' ').slice(0, 19);
+  return new Date().toLocaleString('sv-SE');
 }
 
 function log(line: string): void {
