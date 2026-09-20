@@ -11,14 +11,16 @@ TEMPLATE="$DIR/claude-agents/browser-swarm.template.md"
 PROMPT="$(mktemp)"
 trap 'rm -f "$PROMPT"' EXIT
 
-splice() { awk -v file="$2" '$0 == $ENVIRON["MARKER"] { while ((getline line < file) > 0) print line; close(file); next } 1' "$1"; }
+# splice <marker> <file> <insert>: print <file> with the marker line replaced
+# by the contents of <insert>.
+splice() { awk -v marker="$1" -v insert="$3" '$0 == marker { while ((getline line < insert) > 0) print line; close(insert); next } 1' "$2"; }
 
-MARKER=__TOOLING__ splice "$DIR/agent-prompt.md" "$DIR/claude-agents/tooling.md" > "$PROMPT"
+splice __TOOLING__ "$DIR/agent-prompt.md" "$DIR/claude-agents/tooling.md" > "$PROMPT"
 
 render() {
   local name="$1" description="$2" backend="$3"
   local destination="$AGENTS/$name.md"
-  MARKER=__PROMPT__ splice "$TEMPLATE" "$PROMPT" \
+  splice __PROMPT__ "$TEMPLATE" "$PROMPT" \
     | sed -e "s|__DIR__|$DIR|g" -e "s|__NAME__|$name|g" \
       -e "s|__DESCRIPTION__|$description|g" -e "s|__BACKEND__|$backend|g" \
     > "$destination"

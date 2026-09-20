@@ -13,10 +13,12 @@ TEMPLATE="$DIR/codex-agents/browser-swarm.template.toml"
 PROMPT="$(mktemp)"
 trap 'rm -f "$PROMPT"' EXIT
 
-splice() { awk -v file="$2" '$0 == $ENVIRON["MARKER"] { while ((getline line < file) > 0) print line; close(file); next } 1' "$1"; }
+# splice <marker> <file> <insert>: print <file> with the marker line replaced
+# by the contents of <insert>.
+splice() { awk -v marker="$1" -v insert="$3" '$0 == marker { while ((getline line < insert) > 0) print line; close(insert); next } 1' "$2"; }
 
 "$CODEX" mcp add playwright -- "$NODE" "$DIR/src/cli.ts" mcp chromium
 mkdir -p "$AGENTS"
-MARKER=__TOOLING__ splice "$DIR/agent-prompt.md" "$DIR/codex-agents/tooling.md" > "$PROMPT"
-MARKER=__PROMPT__ splice "$TEMPLATE" "$PROMPT" | sed -e "s|__DIR__|$DIR|g" > "$AGENTS/browser-swarm.toml"
+splice __TOOLING__ "$DIR/agent-prompt.md" "$DIR/codex-agents/tooling.md" > "$PROMPT"
+splice __PROMPT__ "$TEMPLATE" "$PROMPT" | sed -e "s|__DIR__|$DIR|g" > "$AGENTS/browser-swarm.toml"
 echo "wrote $AGENTS/browser-swarm.toml"
