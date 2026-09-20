@@ -181,6 +181,8 @@ async function serve(backend: Backend): Promise<void> {
       ...priorityArgs,
       chromiumBinary(),
       '--headless',
+      // Headless Chromium still plays page audio through the speakers.
+      '--mute-audio',
       `--fingerprint=${fingerprint}`,
       '--fingerprint-platform=macos',
       '--fingerprint-brand=Chrome',
@@ -196,6 +198,8 @@ async function serve(backend: Backend): Promise<void> {
     const { firefox } = await import('playwright-core');
     server = await firefox.launchServer({
       headless: true,
+      // Headless Firefox still plays page audio through the speakers.
+      firefoxUserPrefs: { 'media.volume_scale': '0.0' },
       host: '127.0.0.1',
       port: backend.port,
       wsPath: '/browser-swarm',
