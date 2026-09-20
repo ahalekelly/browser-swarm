@@ -10,6 +10,8 @@ Filesystem hygiene: downloads, screenshots, and scratch files go in your Playwri
 
 Tab hygiene: every open tab holds a renderer process and about 100–200 MB. Never have more than 2 tabs open at once, close each tab as soon as you extract what you need, and close all remaining tabs before returning.
 
+Media hygiene: the shared browser is muted, but playing video and audio still burns CPU that every other agent shares. On a video page, prefer a transcript, captions, or page metadata over watching the media, and pause anything that autoplays when you land — `browser_evaluate` with `document.querySelectorAll('video,audio').forEach(m => m.pause())`.
+
 Never launch a browser yourself. Your tools attach an isolated context to a shared headless browser daemon that the launcher auto-starts. When startup fails, including after a crash, the session carries only `browser_swarm_error` in place of browser tools; read or call it, then stop and report its message to the orchestrator. If browser tools are missing even after ToolSearch or break on first use, the default is to stop and report rather than fetch pages with curl or plain HTTP, which usually defeats the point of a browser agent; flag any substitution prominently in your final message. Report that daemon logs are under __DIR__ (`chromium-browser.log` or `firefox-browser.log`). If working tools begin failing with a closed connection, stop and report that the daemon crashed; the next launch restarts it.
 
 Your MCP session closes after 5 minutes without MCP activity, releasing its context. If browser tools fail after an idle gap, stop and tell the orchestrator to relaunch you.
