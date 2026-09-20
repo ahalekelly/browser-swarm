@@ -1,26 +1,30 @@
 #!/bin/bash
-# Generate both BrowserSwarm agent definitions from the shared template.
+# Generate both BrowserSwarm agent definitions from the shared template, the
+# shared operating prompt, and the Claude-specific tooling paragraph.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-NODE="$(command -v node)"
 AGENTS="$HOME/.claude/agents"
-CHROMIUM_DESCRIPTION="Headless-browser swarm agent for background web automation (lookups, extractions, form-driven flows). Owns a private isolated context in one shared fingerprint-Chromium process. Each context uses about 100–200 MB with the 2-tab cap; keep fan-outs to about 10 concurrent agents. The daemon auto-starts, and the first agent after a crash reports it and asks to be relaunched. Sessions idle for 5 minutes are reaped; relaunch when browser work resumes."
-FIREFOX_DESCRIPTION="Headless-Firefox swarm agent for sites where Chromium is blocked but Firefox renders (Akamai, notably). Owns a cheap isolated context on one shared Firefox process. Use plain browser-swarm unless the site is confirmed to block Chromium. Sessions idle for 5 minutes are reaped; relaunch when browser work resumes."
+CHROMIUM_DESCRIPTION="Headless-browser swarm agent for background web automation (lookups, extractions, form-driven flows). Owns a private isolated context in one shared fingerprint-Chromium process. Each context uses about 100–200 MB with the 2-tab cap; keep fan-outs to about 10 concurrent agents. Contexts idle for 5 minutes are released; relaunch when browser work resumes."
+FIREFOX_DESCRIPTION="Headless-Firefox swarm agent for sites where Chromium is blocked but Firefox renders (Akamai, notably). Owns a cheap isolated context on one shared Firefox process. Use plain browser-swarm unless the site is confirmed to block Chromium. Contexts idle for 5 minutes are released; relaunch when browser work resumes."
 TEMPLATE="$DIR/claude-agents/browser-swarm.template.md"
+PROMPT="$(mktemp)"
+trap 'rm -f "$PROMPT"' EXIT
 
-mkdir -p "$AGENTS"
+splice() { awk -v file="$2" '$0 == $ENVIRON["MARKER"] { while ((getline line < file) > 0) print line; close(file); next } 1' "$1"; }
+
+MARKER=__TOOLING__ splice "$DIR/agent-prompt.md" "$DIR/claude-agents/tooling.md" > "$PROMPT"
 
 render() {
-  local name="$1" description="$2" server_name="$3" browser="$4"
+  local name="$1" description="$2" backend="$3"
   local destination="$AGENTS/$name.md"
-  awk -v prompt="$DIR/agent-prompt.md" '$0 == "__PROMPT__" { while ((getline line < prompt) > 0) print line; next } 1' "$TEMPLATE" \
-    | sed -e "s|__DIR__|$DIR|g" -e "s|__NODE__|$NODE|g" \
-      -e "s|__NAME__|$name|g" -e "s|__DESCRIPTION__|$description|g" \
-      -e "s|__SERVER_NAME__|$server_name|g" -e "s|__BROWSER__|$browser|g" \
+  MARKER=__PROMPT__ splice "$TEMPLATE" "$PROMPT" \
+    | sed -e "s|__DIR__|$DIR|g" -e "s|__NAME__|$name|g" \
+      -e "s|__DESCRIPTION__|$description|g" -e "s|__BACKEND__|$backend|g" \
     > "$destination"
   echo "wrote $destination"
 }
 
-render browser-swarm "$CHROMIUM_DESCRIPTION" playwright chromium
-render browser-swarm-firefox "$FIREFOX_DESCRIPTION" firefox firefox
+mkdir -p "$AGENTS"
+render browser-swarm "$CHROMIUM_DESCRIPTION" ""
+render browser-swarm-firefox "$FIREFOX_DESCRIPTION" " firefox"

@@ -4,10 +4,16 @@
 ./install-agents.sh
 ```
 
-Generates `browser-swarm` and `browser-swarm-firefox` in `~/.claude/agents/`, with this checkout's path and active Node.js path substituted into the templates. Both splice in the shared system prompt from [agent-prompt.md](../agent-prompt.md). Run the installer again after moving the checkout.
+Generates `browser-swarm` and `browser-swarm-firefox` in `~/.claude/agents/`, with this checkout's path substituted into the template. Each splices the shared operating prompt from [agent-prompt.md](../agent-prompt.md) and the Claude tooling paragraph from [tooling.md](tooling.md), which tells the agent to drive the browser with the `swarm` CLI from Bash. Run the installer again after moving the checkout.
 
-The installer removes stale numbered `browser-swarm-1` … `browser-swarm-10` files. The local Claude Code [`mcp-per-subagent`](https://github.com/ahalekelly/claude-patching) patch makes one reusable definition safe for concurrent subagents; the launcher refuses unpatched sessions. See [Claude Code inline MCP server sharing](../docs/claude-code-mcp-dedup.md).
+The definitions declare no MCP server, so any number of them can run at once. Both withhold the `Agent` tool: a browser task is cheap to do and expensive to delegate.
 
 Use `browser-swarm-firefox` only for sites confirmed to block Chromium. It gets an isolated context on one shared Playwright Firefox process.
 
-Keep fan-outs to about 10 concurrent agents. Each context uses roughly 100–200 MB with the 2-tab cap. Sessions close after five idle minutes; relaunch when browser work resumes.
+Keep fan-outs to about 10 concurrent agents. Each context uses roughly 100–200 MB with the 2-tab cap. Contexts are released after five idle minutes; relaunch when browser work resumes.
+
+Verify the integration from a Claude Code session:
+
+```sh
+id=$(<checkout>/swarm open) && <checkout>/swarm "$id" tabs '{"action":"list"}' && <checkout>/swarm "$id" close
+```
