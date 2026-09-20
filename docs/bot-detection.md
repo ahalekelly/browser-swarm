@@ -1,6 +1,6 @@
 # Bot detection and browser engines
 
-Many sites put a bot-detection system — Cloudflare, Akamai, DataDome, and similar — in front of their content. These systems are tuned to flag automated traffic, and a stock headless browser can receive a challenge or a blank shell instead of the page. This doc covers which engine gets through which system, how to tell which system a site is running, and why the daemon's default browser is fingerprint-chromium.
+Many sites put a bot-detection system — Cloudflare, Akamai, DataDome, and similar — in front of their content. These systems are tuned to flag automated traffic, and a stock headless browser can receive a challenge or a blank shell instead of the page. This doc covers which engine gets through which system, how to tell which system a site is running, and why the default browser is fingerprint-chromium.
 
 Findings were measured on live commercial sites in July 2026. Detection vendors tune continuously, so treat the ratings as a starting point and re-probe when a site that used to render stops rendering.
 
@@ -8,8 +8,8 @@ Findings were measured on live commercial sites in July 2026. Detection vendors 
 
 | Detection system | Path | Confidence |
 |---|---|---|
-| None / light | The shared fingerprint-chromium daemon | — |
-| Cloudflare | Usually just CDN, not a challenge. Try the daemon first, escalate only on a real interstitial | untested in depth |
+| None / light | The shared fingerprint-chromium browser | — |
+| Cloudflare | Usually just CDN, not a challenge. Try Chromium first, escalate only on a real interstitial | untested in depth |
 | **Akamai** | Shared fingerprint-Chromium or shared headless Firefox | live-confirmed, both |
 | **DataDome**, alone or stacked | No headless engine renders. Skip the browser | live-confirmed negative |
 | **PerimeterX** | Behaves like DataDome; headless Firefox is blocked | one live data point |
@@ -61,7 +61,7 @@ One engine family this rules out entirely: **CDP-minimal drivers — zendriver, 
 
 ## What the MCP can drive
 
-- **CDP is Chromium-only.** Firefox agents connect to the shared `firefox.launchServer()` daemon through Playwright's WebSocket protocol instead. Each MCP client still gets an isolated context on one browser process.
+- **CDP is Chromium-only.** Firefox contexts connect to the shared `firefox.launchServer()` process through Playwright's WebSocket protocol instead. Each one still gets an isolated context on that browser.
 - **`--browser` accepts only `chrome`, `firefox`, `webkit`, `msedge`,** but **`--config` exposes the full Playwright `launchOptions`** — `executablePath`, `args`, `ignoreDefaultArgs`, `env`, plus `contextOptions`. Any engine whose configuration is a patched binary plus launch flags is therefore reachable from the MCP alone, with no second driver process.
 - **`--endpoint <ws url>`** connects to an existing Playwright server (`browserType.connect()`), not a CDP endpoint. Unlike `--cdp-endpoint` this is browser-agnostic, so it's the hook for any engine that can expose a Playwright server.
 - **`--init-script <path>`** adds JavaScript evaluated in every page before the page's own scripts; **`--init-page <path>`** evaluates TypeScript against the Playwright page object, which is the escape hatch for anything the page context can't do, such as `setExtraHTTPHeaders`.

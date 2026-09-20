@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install the pinned fingerprint-chromium build used by the Chromium daemon.
+# Install the pinned fingerprint-chromium build used by the Chromium backend.
 set -euo pipefail
 
 VERSION=148.0.7778.215
