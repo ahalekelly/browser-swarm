@@ -11,7 +11,7 @@ import { IDLE_MS, ROOT } from './config.ts';
 
 const CLOSE_TOOL = {
   name: 'browser_close',
-  description: 'Close this browser context and release its tabs. Call it when the browser work is done.',
+  description: 'Permanently close this MCP session’s browser context and release its tabs. Call it when the browser work is done; further browser work needs a fresh browser-swarm agent.',
   inputSchema: { type: 'object', properties: {} },
 };
 
@@ -75,6 +75,7 @@ export async function serveMcp(backend: 'chromium' | 'firefox'): Promise<void> {
         await close();
         return { content: [{ type: 'text', text: `Closed browser context ${id}.` }] };
       }
+      if (closed) throw new Error('This MCP session is closed. Ask the orchestrator to spawn a fresh browser-swarm agent for further browser work; resuming this agent does not create a new context.');
       const result = await api('POST', `/contexts/${id}/call`, {
         name: request.params.name,
         arguments: request.params.arguments ?? {},
