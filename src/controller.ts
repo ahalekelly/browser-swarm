@@ -273,7 +273,7 @@ async function openContext(name: BackendName): Promise<{ id: string; outputDir: 
   browserState(name).idleSince = undefined;
 
   const transport = new StdioClientTransport({
-    command: process.execPath,
+    command: process.argv0,
     args: [
       join(ROOT, 'node_modules/@playwright/mcp/cli.js'),
       backend.endpointFlag, backend.endpoint,
