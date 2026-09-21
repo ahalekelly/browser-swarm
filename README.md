@@ -59,7 +59,7 @@ Every suite builds a private fixture — a copy of `src/` with its ports, output
 
 They carry no MCP server. The agent runs `swarm` from Bash, which is why any number of them can work at once: [claude-code#84638](https://github.com/anthropics/claude-code/issues/84638) makes stock Claude Code route concurrent subagents that declare the same inline MCP server through one session, and the first subagent to finish closes it under its siblings. Nothing per-agent runs in the harness now, so there is nothing for the harness to share. Both definitions still withhold the `Agent` tool: a browser task is cheap to do and expensive to delegate.
 
-[`codex-agents/`](codex-agents/) generates one `browser-swarm` definition and registers `swarm mcp chromium` as the `playwright` MCP server. Codex's command sandbox blocks all network access, so its agents cannot call the CLI; the adapter owns one context per MCP session and forwards tool calls to the controller. Start a new Codex session after installation.
+[`codex-agents/`](codex-agents/) generates one `browser-swarm` definition and registers `swarm mcp chromium` as the `playwright` MCP server. Codex's command sandbox blocks all network access, so its agents cannot call the CLI; the adapter owns one context per MCP session and forwards tool calls to the controller. Multiple agents of this type can run concurrently. After `browser_close` or idle expiry, further browser work needs a freshly spawned agent; a follow-up to the closed agent reuses its closed MCP session. Start a new Codex session after installation.
 
 Both families splice [agent-prompt.md](agent-prompt.md) and the harness's own tooling paragraph.
 
