@@ -69,7 +69,7 @@ export async function createFixture(t, overrides = {}) {
   fs.writeFileSync(path.join(dir, 'fingerprint-seed'), '12345678\n');
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
 
-  for (const name of ['config.ts', 'api.ts', 'controller.ts', 'cli.ts', 'mcp.ts']) {
+  for (const name of ['config.ts', 'api.ts', 'controller.ts', 'cli.ts', 'mcp.ts', 'firefox-server.ts']) {
     let source = fs.readFileSync(path.join(repo, 'src', name), 'utf8');
     for (const [key, value] of Object.entries(constants)) {
       source = source.replace(new RegExp(`(const ${key} = )[\\d_]+`), `$1${value}`);
@@ -118,29 +118,15 @@ export function installFakeFirefox(dir) {
   const moduleDir = path.join(dir, 'node_modules/playwright-core');
   fs.mkdirSync(moduleDir, { recursive: true });
   fs.writeFileSync(path.join(moduleDir, 'package.json'), JSON.stringify({ type: 'module', exports: './index.js' }));
+  // FAKE_FIREFOX_HANG stands in for a Firefox that starts but never finishes
+  // its handshake: the port opens and launchServer never settles.
   fs.writeFileSync(path.join(moduleDir, 'index.js'), `
-import { EventEmitter } from 'node:events';
 import { createServer } from 'node:net';
 export const firefox = {
   launchServer: ({ host, port, wsPath }) => new Promise((resolve) => {
-    const events = new EventEmitter();
-    const sockets = new Set();
-    const listener = createServer((socket) => {
-      sockets.add(socket);
-      socket.on('close', () => sockets.delete(socket));
+    createServer().listen(port, host, () => {
+      if (!process.env.FAKE_FIREFOX_HANG) resolve({ wsEndpoint: () => \`ws://\${host}:\${port}\${wsPath}\`, on: () => {} });
     });
-    listener.listen(port, host, () => resolve({
-      wsEndpoint: () => \`ws://\${host}:\${port}\${wsPath}\`,
-      process: () => ({ pid: process.pid }),
-      on: events.on.bind(events),
-      close: () => new Promise((closed) => {
-        for (const socket of sockets) socket.destroy();
-        listener.close(() => {
-          events.emit('close');
-          closed();
-        });
-      }),
-    }));
   }),
 };
 `);

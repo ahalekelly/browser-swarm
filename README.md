@@ -27,6 +27,8 @@ id=$(./swarm open)                                    # ./swarm open firefox for
 ./swarm "$id" close
 ```
 
+On macOS 27, Playwright's bundled Firefox never finishes starting ([microsoft/playwright#42082](https://github.com/microsoft/playwright/issues/42082)), so `./swarm open firefox` fails after the 120-second boot budget; Chromium is unaffected.
+
 `open` prints the context id on stdout and its output directory on stderr, so `$( )` captures the id alone. Tool names drop Playwright MCP's `browser_` prefix. `./swarm "$id" tools` lists them with one line of description each, and `./swarm "$id" help <tool>` prints one tool's schema, so a session never needs every schema up front. Pass `-` in place of the JSON arguments to read them from stdin, which avoids shell quoting trouble for long text.
 
 Exit codes: 0 success, 1 the tool reported an error, 2 usage, 3 controller or transport failure, 4 unknown or expired context.
@@ -77,7 +79,7 @@ Both families splice [agent-prompt.md](agent-prompt.md) and the harness's own to
 
 ## How it works
 
-**One service, two backends.** The controller listens on `127.0.0.1:9387` and launches a browser on the first `open` for that backend: fingerprint-Chromium on CDP port 9377 at low priority (`taskpolicy -c utility` on macOS, `nice -n 10` on Linux), and Playwright's managed Firefox through `firefox.launchServer()` at `ws://127.0.0.1:9378/browser-swarm`. Plain `launchServer` is load-bearing: shared-browser mode disables per-client context isolation. Both launch muted, so pages never play audio through the machine's speakers. A cold first-run profile gets 120 seconds to answer, and a browser that dies takes its contexts with it — the next `open` relaunches it and `swarm status` reports the crash.
+**One service, two backends.** The controller listens on `127.0.0.1:9387` and launches a browser on the first `open` for that backend: fingerprint-Chromium on CDP port 9377 at low priority (`taskpolicy -c utility` on macOS, `nice -n 10` on Linux), and Playwright's managed Firefox through `firefox.launchServer()` at `ws://127.0.0.1:9378/browser-swarm`. Plain `launchServer` is load-bearing: shared-browser mode disables per-client context isolation. `launchServer` has no working launch timeout, so it runs in a child process (`src/firefox-server.ts`) the controller can kill. Both launch muted, so pages never play audio through the machine's speakers. Each browser gets 120 seconds to answer or is killed, and a browser that dies takes its contexts with it — the next `open` relaunches it and `swarm status` reports the crash.
 
 **Contexts are child processes.** Each context is a `@playwright/mcp` process with `--isolated`, its own output dir and the backend's endpoint. The pinned 0.0.79 cannot be embedded in a long-lived process: every initialized context installs a process-wide `unhandledRejection` listener, its `browser.once('disconnected')` listeners outlive cleanup, and `server.close()` leaves a supplied context open. A child process per context is also exactly the isolation the real gates test.
 

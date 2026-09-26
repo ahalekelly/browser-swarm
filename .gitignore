@@ -4,6 +4,5 @@ node_modules/
 .claude/
 fingerprint-chromium/
 chromium-browser-profile/
-firefox-browser-profile/
 fingerprint-seed
 controller-token
