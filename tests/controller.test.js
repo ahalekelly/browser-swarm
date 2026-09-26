@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import path from 'node:path';
 import test from 'node:test';
 import {
@@ -280,6 +281,34 @@ test('the Firefox backend runs its own browser and contexts', async (t) => {
 
   const status = (await controller.call('GET', '/status')).body;
   assert.deepEqual(status.browsers.map((browser) => [browser.backend, browser.running, browser.contexts]), [['firefox', true, 1]]);
+
+  // The launcher child exits on SIGTERM, before the controller escalates to SIGKILL.
+  const stopping = Date.now();
+  await controller.stop();
+  assert.ok(Date.now() - stopping < 1500, 'the Firefox launcher ignored SIGTERM');
+  assert.equal(alive(status.browsers[0].pid), false);
+});
+
+test('a Firefox launch that never finishes is killed and reported, and later opens relaunch it', async (t) => {
+  const fixture = await createFixture(t, { BOOT_TIMEOUT_MS: 1000 });
+  installFakeFirefox(fixture.dir);
+  const controller = await startController(t, fixture, { FAKE_FIREFOX_HANG: '1' });
+
+  const first = await controller.call('POST', '/contexts', { backend: 'firefox' });
+  assert.equal(first.status, 500);
+  assert.match(first.body.error, /shared Firefox browser did not announce its endpoint .* within 1s/);
+  assert.equal(await accepts(fixture.ports.firefox), false, 'the hung Firefox launcher is still running');
+  assert.equal((await controller.call('GET', '/status')).body.browsers[0].running, false);
+
+  assert.equal((await controller.call('POST', '/contexts', { backend: 'firefox' })).status, 500);
+  assert.equal(controller.log().match(/starting shared Firefox browser/g).length, 2);
+
+  // A controller that exits mid-launch takes the launcher and its port with it.
+  const third = controller.call('POST', '/contexts', { backend: 'firefox' }).catch(() => {});
+  await eventually(() => controller.log().match(/starting shared Firefox browser/g).length === 3, 5000, 'third launch');
+  await controller.stop();
+  await third;
+  assert.equal(await accepts(fixture.ports.firefox), false, 'the launcher outlived the controller');
 });
 
 test('the API refuses anything but an authorized, well-formed request', async (t) => {
@@ -323,6 +352,16 @@ function alive(pid) {
   } catch {
     return false;
   }
+}
+
+function accepts(port) {
+  return new Promise((resolve) => {
+    const socket = net.connect(port, '127.0.0.1', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.on('error', () => resolve(false));
+  });
 }
 
 function browserConnections(port) {

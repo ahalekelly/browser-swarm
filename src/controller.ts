@@ -32,7 +32,6 @@ type Backend = {
   name: BackendName;
   displayName: string;
   port: number;
-  profile: string;
   endpoint: string;
   endpointFlag: string;
 };
@@ -95,7 +94,6 @@ function backendFor(name: BackendName): Backend {
     name,
     displayName: `shared ${firefox ? 'Firefox' : 'Chromium'} browser`,
     port: firefox ? 9378 : 9377,
-    profile: join(ROOT, `${name}-browser-profile`),
     endpoint: firefox ? 'ws://127.0.0.1:9378/browser-swarm' : 'http://127.0.0.1:9377',
     endpointFlag: firefox ? '--endpoint' : '--cdp-endpoint',
   };
@@ -127,40 +125,24 @@ async function ensureBrowser(name: BackendName): Promise<void> {
 
 async function launchBrowser(state: BrowserState): Promise<void> {
   const { backend } = state;
-  mkdirSync(backend.profile, { recursive: true });
   state.stopping = false;
   log(`starting ${backend.displayName}`);
-  if (backend.name === 'chromium') await launchChromium(state);
-  else await launchFirefox(state);
+  await spawnBrowser(state);
   state.running = true;
   state.startedAt = Date.now();
   state.idleSince = Date.now();
   log(`${backend.displayName} up: pid ${state.pid}, ${backend.endpoint}`);
 }
 
-async function launchChromium(state: BrowserState): Promise<void> {
+async function spawnBrowser(state: BrowserState): Promise<void> {
   const { backend } = state;
-  const binary = join(ROOT, PLATFORM.chromiumBinary);
-  const seedFile = join(ROOT, 'fingerprint-seed');
-  const seed = readFileSync(seedFile, 'utf8').trim();
-  const [command, ...priorityArgs] = PLATFORM.lowPriority;
-  const child = spawn(command, [
-    ...priorityArgs,
-    binary,
-    '--headless',
-    // Headless Chromium still plays page audio through the speakers.
-    '--mute-audio',
-    `--fingerprint=${seed}`,
-    '--fingerprint-platform=macos',
-    '--fingerprint-brand=Chrome',
-    `--remote-debugging-port=${backend.port}`,
-    `--user-data-dir=${backend.profile}`,
-    '--no-first-run',
-  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const { command, args, awaiting, ready } = backend.name === 'chromium' ? chromiumLaunch(backend) : firefoxLaunch(backend);
+  const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
   // Browser output goes to the controller's log, and its tail goes into the
   // startup error, because that error is all an agent ever sees.
   let tail = '';
+  let firstLine = '';
   for (const stream of [child.stdout, child.stderr]) {
     stream.setEncoding('utf8');
     stream.on('data', (chunk: string) => {
@@ -168,6 +150,7 @@ async function launchChromium(state: BrowserState): Promise<void> {
       process.stderr.write(chunk);
     });
   }
+  child.stdout.on('data', (chunk: string) => { if (!firstLine.includes('\n')) firstLine += chunk; });
 
   const exited = new Promise<void>((resolveExit) => child.once('close', () => resolveExit()));
   let down = false;
@@ -183,38 +166,54 @@ async function launchChromium(state: BrowserState): Promise<void> {
     await exited;
   };
 
-  // A cold first-run profile on a loaded machine takes tens of seconds to open
-  // its debugging port, so the wait is generous.
+  // A cold first-run profile on a loaded machine takes tens of seconds to
+  // start, so the wait is generous.
   for (let waited = 0; waited < BOOT_TIMEOUT_MS; waited += BOOT_POLL_MS) {
     if (down) throw new Error(`${backend.displayName} exited during startup. Its last output:\n${tail.trimEnd() || '(none)'}`);
-    if (await cdpReady(backend.port)) return;
+    if (await ready(firstLine)) return;
     await delay(BOOT_POLL_MS);
   }
   await state.stop();
-  throw new Error(`${backend.displayName} did not answer on port ${backend.port} within ${BOOT_TIMEOUT_MS / 1000}s. Its last output:\n${tail.trimEnd() || '(none)'}`);
+  throw new Error(`${backend.displayName} did not ${awaiting} within ${BOOT_TIMEOUT_MS / 1000}s. Its last output:\n${tail.trimEnd() || '(none)'}`);
 }
 
-async function launchFirefox(state: BrowserState): Promise<void> {
-  const { backend } = state;
-  const { firefox } = await import('playwright-core');
-  const server = await firefox.launchServer({
-    headless: true,
-    // Headless Firefox still plays page audio through the speakers.
-    firefoxUserPrefs: { 'media.volume_scale': '0.0' },
-    host: '127.0.0.1',
-    port: backend.port,
-    wsPath: '/browser-swarm',
-  });
-  if (server.wsEndpoint() !== backend.endpoint) {
-    await server.close();
-    throw new Error(`Firefox endpoint mismatch: expected ${backend.endpoint}, got ${server.wsEndpoint()}`);
-  }
-  state.pid = server.process().pid;
-  state.stop = async () => {
-    state.stopping = true;
-    await server.close();
+type Launch = { command: string; args: string[]; awaiting: string; ready: (firstLine: string) => boolean | Promise<boolean> };
+
+function chromiumLaunch(backend: Backend): Launch {
+  const profile = join(ROOT, 'chromium-browser-profile');
+  mkdirSync(profile, { recursive: true });
+  const seed = readFileSync(join(ROOT, 'fingerprint-seed'), 'utf8').trim();
+  const [command, ...priorityArgs] = PLATFORM.lowPriority;
+  return {
+    command,
+    args: [
+      ...priorityArgs,
+      join(ROOT, PLATFORM.chromiumBinary),
+      '--headless',
+      // Headless Chromium still plays page audio through the speakers.
+      '--mute-audio',
+      `--fingerprint=${seed}`,
+      '--fingerprint-platform=macos',
+      '--fingerprint-brand=Chrome',
+      `--remote-debugging-port=${backend.port}`,
+      `--user-data-dir=${profile}`,
+      '--no-first-run',
+    ],
+    awaiting: `answer on port ${backend.port}`,
+    ready: () => cdpReady(backend.port),
   };
-  server.on('close', () => onBrowserExit(state));
+}
+
+// The launcher child is what the controller signals and reports as the pid;
+// it takes its Firefox down with it. Playwright gives Firefox a fresh
+// temporary profile per launch.
+function firefoxLaunch(backend: Backend): Launch {
+  return {
+    command: process.argv0,
+    args: [join(ROOT, 'src/firefox-server.ts'), backend.endpoint],
+    awaiting: `announce its endpoint ${backend.endpoint}`,
+    ready: (firstLine) => firstLine.includes('\n'),
+  };
 }
 
 function onBrowserExit(state: BrowserState): void {
@@ -573,7 +572,7 @@ async function shutdown(): Promise<void> {
   shuttingDown = true;
   log('shutting down');
   for (const id of [...contexts.keys()]) closeContext(id);
-  await Promise.all([...browsers.values()].filter((state) => state.running).map((state) => state.stop()));
+  await Promise.all([...browsers.values()].filter((state) => state.running || state.starting).map((state) => state.stop()));
   process.exit(0);
 }
 
