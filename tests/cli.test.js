@@ -125,7 +125,7 @@ test('an unreachable controller exits 3 and names the service command', async (t
   const failed = swarm(fixture, ['status']);
   assert.equal(failed.status, 3);
   assert.match(failed.stderr, /cannot reach the BrowserSwarm controller at 127\.0\.0\.1:\d+/);
-  assert.match(failed.stderr, /systemctl --user start browser-swarm|launchctl kickstart/);
+  assert.match(failed.stderr, /systemctl --user start browser-swarm|install-controller-service\.sh/);
 });
 
 test('a missing token says the controller has never run', async (t) => {

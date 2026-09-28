@@ -10,6 +10,9 @@ export const CALL_DEADLINE_MS = 120_000;
 export const IDLE_MS = 300_000;
 
 export const TOKEN_FILE = join(ROOT, 'controller-token');
+// On macOS the hint re-registers the launchd job instead of kickstarting it:
+// launchd pins the node binary's code hash at registration, so after a
+// Homebrew node upgrade `launchctl kickstart -k` fails with EX_CONFIG forever.
 export const SERVICE_HINT = process.platform === 'darwin'
-  ? 'launchctl kickstart -k gui/$UID/com.browser-swarm.controller'
+  ? join(ROOT, 'install-controller-service.sh')
   : 'systemctl --user start browser-swarm';

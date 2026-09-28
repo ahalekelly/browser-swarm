@@ -33,12 +33,14 @@ Exit codes: 0 success, 1 the tool reported an error, 2 usage, 3 controller or tr
 
 `./swarm ls` lists open contexts with age, idle time, output dir and page URLs. `./swarm status` reports each browser and the last crash.
 
-The controller runs as a user service, so starting and stopping it belongs to the service manager:
+The controller runs as a user service and only picks up new code or a new `node` binary when restarted:
 
 ```sh
-systemctl --user restart browser-swarm          # Linux; journalctl --user -u browser-swarm for logs
-launchctl kickstart -k gui/$UID/com.browser-swarm.controller   # macOS; logs in controller.log
+systemctl --user restart browser-swarm   # Linux; journalctl --user -u browser-swarm for logs
+./install-controller-service.sh          # macOS; logs in controller.log
 ```
+
+On macOS the install script re-registers the launchd job rather than kickstarting it, because launchd pins the `node` binary's code hash at registration and refuses to spawn a Homebrew-upgraded `node` under the old registration.
 
 ## Tests
 
