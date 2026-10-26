@@ -133,11 +133,15 @@ async function login(session: string, url: string): Promise<void> {
       process.exit();
     });
   }, LOGIN_RENEW_MS);
-  // Ctrl-D or a closed terminal counts as Enter rather than waiting forever.
-  await new Promise((resolveEnter) => {
-    process.stdin.once('data', resolveEnter);
-    process.stdin.once('end', resolveEnter);
+  // Ctrl-D or a closed terminal aborts rather than saving a half-finished login.
+  const entered = await new Promise<boolean>((resolveEnter) => {
+    process.stdin.once('data', () => resolveEnter(true));
+    process.stdin.once('end', () => resolveEnter(false));
   });
+  if (!entered) {
+    fail(1, `Session ${session} is unchanged; context ${id} expires unsaved.`);
+    process.exit();
+  }
   closing = true;
   clearInterval(renew);
   process.stdin.destroy();
