@@ -6,6 +6,8 @@ Open a context first and keep its id:
 id=$(__DIR__/swarm open__BACKEND__)
 ```
 
+When your prompt names a saved session, add `--session <name>` to `open` to start logged in to that account.
+
 `open` prints the id on stdout and the context's output directory on stderr. Every later command takes that id:
 
 - `__DIR__/swarm "$id" tools` — the tools this context has, one line each

@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import test from 'node:test';
-import { createFixture, freePort, startController, swarm, swarmAsync } from './helpers.js';
+import { createFixture, freePort, NO_SANDBOX_PROXY, run, startController, swarm, swarmAsync } from './helpers.js';
 
 const PASSWORD = 'p@ss:word/with specials';
 
@@ -86,6 +86,48 @@ test('a large result is previewed with a path to the full text', async (t) => {
   const note = lines.at(-1).match(/^\[500 lines; first 100 shown, full text at (.*)\]$/);
   assert.ok(note, `missing the truncation note: ${lines.at(-1)}`);
   assert.equal(fs.readFileSync(note[1], 'utf8').split('\n').length, 500);
+});
+
+test('open --session names the session, ls shows it, and close saves it', async (t) => {
+  const fixture = await createFixture(t);
+  await startController(t, fixture);
+
+  const opened = swarm(fixture, ['open', '--session', 'shop']);
+  assert.equal(opened.status, 0, opened.stderr);
+  const id = opened.stdout.trim();
+  assert.match(opened.stderr, /^session: shop \(new, starts logged out\)$/m);
+  assert.match(swarm(fixture, ['ls']).stdout, new RegExp(`${id} {2}chromium {2}session shop`));
+  assert.match(swarm(fixture, [id, 'close']).stderr, new RegExp(`closed ${id}, saved session shop`));
+
+  const reopened = swarm(fixture, ['open', 'firefox', '--session', 'shop']);
+  assert.equal(reopened.status, 3, 'firefox without a fake Firefox should fail in the controller, not in parsing');
+  const again = swarm(fixture, ['open', '--session', 'shop', 'chromium']);
+  assert.match(again.stderr, /^session: shop$/m);
+
+  assert.equal(swarm(fixture, ['open', '--session']).status, 2);
+  assert.equal(swarm(fixture, ['open', '--session', 'Bad/Name']).status, 2);
+  assert.equal(swarm(fixture, ['open', 'chromium', 'extra']).status, 2);
+});
+
+test('login opens the page, waits for Enter, and saves the session', async (t) => {
+  const fixture = await createFixture(t);
+  await startController(t, fixture);
+
+  // login insists on a terminal, so `script` gives it one; its output arrives
+  // on stdout with the terminal's line endings.
+  const command = [process.execPath, fixture.cli, 'login', 'shop', 'https://example.com/login'];
+  const login = process.platform === 'darwin'
+    ? run('script', ['-q', '/dev/null', ...command], { input: '\n', env: { ...process.env, ...NO_SANDBOX_PROXY } })
+    : run('script', ['-qec', command.join(' '), '/dev/null'], { input: '\n', env: { ...process.env, ...NO_SANDBOX_PROXY } });
+  assert.equal(login.status, 0, login.stdout);
+  assert.match(login.stdout, /is on https:\/\/example\.com\/login/);
+  assert.match(login.stdout, /saved session shop/);
+  const saved = JSON.parse(fs.readFileSync(path.join(fixture.dir, 'sessions/shop.json'), 'utf8'));
+  assert.deepEqual(saved.cookies.map((cookie) => cookie.value), ['https://example.com/login']);
+  assert.equal(swarm(fixture, ['login', 'shop']).status, 2);
+  const piped = swarm(fixture, ['login', 'shop', 'https://example.com/login'], { input: '\n' });
+  assert.equal(piped.status, 2);
+  assert.match(piped.stderr, /waits for Enter on a terminal/);
 });
 
 test('ls and status describe the swarm', async (t) => {

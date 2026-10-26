@@ -69,6 +69,31 @@ export function realBrowserTests(backend) {
     assert.ok(fs.statSync(files[0]).size > 0, 'artifacts did not survive their context');
   });
 
+  test(`a ${backend} session carries cookies and localStorage from one context to the next`, async (t) => {
+    const fixture = await createFixture(t, { realBrowser: true, IDLE_MS: 600_000 });
+    const controller = await startController(t, fixture);
+    const site = await testSite(t);
+
+    const login = await context(controller, backend, 'shop');
+    await login.call('browser_navigate', { url: `${site}/login` });
+    await login.call('browser_evaluate', { function: "() => localStorage.setItem('draft', 'kept')" });
+    assert.equal((await login.close()).body.session, 'shop');
+    const saved = path.join(fixture.dir, 'sessions/shop.json');
+    assert.equal(fs.statSync(saved).mode & 0o777, 0o600);
+
+    const later = await context(controller, backend, 'shop');
+    // The server echoes the request's cookies, which proves the HttpOnly one
+    // reached the wire and not just document.cookie.
+    await later.call('browser_navigate', { url: `${site}/echo` });
+    const page = await later.call('browser_evaluate', { function: "() => document.body.textContent + ' ' + localStorage.getItem('draft')" });
+    assert.match(page, /token=secret/);
+    assert.match(page, /kept/);
+
+    const stranger = await context(controller, backend);
+    await stranger.call('browser_navigate', { url: `${site}/echo` });
+    assert.doesNotMatch(await stranger.call('browser_evaluate', { function: '() => document.body.textContent' }), /token=secret/);
+  });
+
   test(`an idle ${backend} context is released and its browser stops`, async (t) => {
     const fixture = await createFixture(t, { realBrowser: true, IDLE_MS: 5_000 });
     const controller = await startController(t, fixture);
@@ -80,8 +105,8 @@ export function realBrowserTests(backend) {
   });
 }
 
-async function context(controller, backend) {
-  const opened = await controller.call('POST', '/contexts', { backend });
+async function context(controller, backend, session) {
+  const opened = await controller.call('POST', '/contexts', { backend, session });
   assert.equal(opened.status, 200, JSON.stringify(opened.body));
   return {
     id: opened.body.id,
@@ -104,9 +129,9 @@ async function testSite(t) {
       response.end();
       return;
     }
-    response.setHeader('set-cookie', `visited=${name}; Path=/`);
+    response.setHeader('set-cookie', name === 'login' ? 'token=secret; Path=/; HttpOnly' : `visited=${name}; Path=/`);
     response.setHeader('content-type', 'text/html');
-    response.end(`<title>${name}</title><h1>${name}</h1>`);
+    response.end(`<title>${name}</title><h1>${name === 'echo' ? `cookies: ${request.headers.cookie ?? ''}` : name}</h1>`);
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');

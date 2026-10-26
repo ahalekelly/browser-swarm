@@ -4,10 +4,10 @@
 // harness and harnesses have nothing to share between subagents.
 import { spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer, get, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
-import { CALL_DEADLINE_MS, IDLE_MS, OUTPUT_ROOT, PORT, ROOT, TOKEN_FILE } from './config.ts';
+import { CALL_DEADLINE_MS, IDLE_MS, OUTPUT_ROOT, PORT, ROOT, SESSION_ROOT, TOKEN_FILE } from './config.ts';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
@@ -25,6 +25,12 @@ const LARGE_RESULT_LINES = 200;
 // @playwright/mcp only filters tools by capability, and both live in `core`,
 // so the controller drops them from discovery and dispatch.
 const BLOCKED_TOOLS = new Set(['browser_run_code_unsafe', 'browser_close']);
+// A session context runs with the `storage` capability so the controller can
+// export its state on close. Those tools would hand the agent session cookies,
+// including HttpOnly ones, so they stay controller-only.
+const STORAGE_TOOLS = /^browser_((cookie|localstorage|sessionstorage)_[a-z]+|(set_)?storage_state)$/;
+const SESSION_NAME = /^[a-z0-9-]+$/;
+const SAVE_DEADLINE_MS = 30_000;
 
 export type BackendName = 'chromium' | 'firefox';
 
@@ -53,6 +59,7 @@ type Context = {
   id: string;
   backend: BackendName;
   outputDir: string;
+  session?: string;
   client: Client;
   createdAt: number;
   lastActivity: number;
@@ -247,20 +254,29 @@ function cdpReady(port: number): Promise<boolean> {
 
 // Contexts
 
-async function openContext(name: BackendName): Promise<{ id: string; outputDir: string }> {
+async function openContext(name: BackendName, session?: string): Promise<{ id: string; outputDir: string; session?: { name: string; existing: boolean } }> {
   await ensureBrowser(name);
   const backend = backendFor(name);
   // Output dirs outlive their contexts, so ids must stay unique over the
   // controller's whole history, not just among the live contexts.
   const id = `c${randomBytes(8).toString('hex')}`;
   const outputDir = join(OUTPUT_ROOT, id);
-  mkdirSync(outputDir, { recursive: true });
+  // A session context's screenshots and exported state are as private as its
+  // cookies, and every context's owner runs as this user anyway.
+  mkdirSync(outputDir, { recursive: true, mode: 0o700 });
+  const sessionArgs: string[] = [];
+  let existing = false;
+  if (session !== undefined) {
+    existing = existsSync(sessionFile(session));
+    sessionArgs.push('--caps', 'storage', ...(existing ? ['--storage-state', sessionFile(session)] : []));
+  }
 
   const client = new Client({ name: 'browser-swarm', version: version() }, { capabilities: {} });
   const context: Context = {
     id,
     backend: name,
     outputDir,
+    session,
     client,
     createdAt: Date.now(),
     lastActivity: Date.now(),
@@ -282,6 +298,7 @@ async function openContext(name: BackendName): Promise<{ id: string; outputDir: 
       // Screenshots come back as a file path the agent reads with its own
       // image-capable tool instead of an inline image the CLI cannot print.
       '--image-responses', 'omit',
+      ...sessionArgs,
     ],
     // Playwright MCP restricts file access to its workspace root, which is the
     // process cwd. Each context therefore works inside its own output dir.
@@ -302,8 +319,31 @@ async function openContext(name: BackendName): Promise<{ id: string; outputDir: 
   client.onclose = () => killContext(context, `context ${id} is lost: its Playwright MCP process exited`);
   context.inFlight -= 1;
   context.lastActivity = Date.now();
-  log(`opened ${id} (${name}) at ${outputDir}`);
-  return { id, outputDir };
+  log(`opened ${id} (${name}${session === undefined ? '' : `, session ${session}`}) at ${outputDir}`);
+  return { id, outputDir, ...(session === undefined ? {} : { session: { name: session, existing } }) };
+}
+
+function sessionFile(session: string): string {
+  return join(SESSION_ROOT, `${session}.json`);
+}
+
+// Playwright MCP writes the export inside the context's workspace, which is
+// all it may write to; the controller moves it into the session store. The
+// temp-then-rename write means concurrent closes of one session leave the last
+// complete state rather than a torn file.
+async function saveSession(context: Context, session: string): Promise<void> {
+  const exported = join(context.outputDir, 'session-state.json');
+  const result = await enqueue(context, false, () => context.client.callTool(
+    { name: 'browser_storage_state', arguments: { filename: exported } },
+    undefined,
+    { timeout: SAVE_DEADLINE_MS },
+  ));
+  if (result.isError) throw new Error(`browser_storage_state failed: ${JSON.stringify(result.content)}`);
+  const state = readFileSync(exported);
+  unlinkSync(exported);
+  const temporary = join(SESSION_ROOT, `.${session}.${context.id}.tmp`);
+  writeFileSync(temporary, state, { mode: 0o600 });
+  renameSync(temporary, sessionFile(session));
 }
 
 function liveContext(id: string): Context {
@@ -335,7 +375,7 @@ async function callTool(id: string, name: string, args: Record<string, unknown>)
   if (name === 'browser_close') {
     throw new ApiError(400, `browser_close is not available through BrowserSwarm; close the context with \`swarm ${id} close\``);
   }
-  if (BLOCKED_TOOLS.has(name)) throw new ApiError(400, `${name} is not available through BrowserSwarm`);
+  if (withheld(name)) throw new ApiError(400, `${name} is not available through BrowserSwarm`);
   const context = liveContext(id);
   const result = await enqueue(context, true, async () => {
     try {
@@ -366,7 +406,11 @@ async function callTool(id: string, name: string, args: Record<string, unknown>)
 async function listTools(id: string): Promise<{ tools: unknown[] }> {
   const context = liveContext(id);
   const result = await enqueue(context, true, () => context.client.listTools());
-  return { tools: result.tools.filter((tool) => !BLOCKED_TOOLS.has(tool.name)) };
+  return { tools: result.tools.filter((tool) => !withheld(tool.name)) };
+}
+
+function withheld(name: string): boolean {
+  return BLOCKED_TOOLS.has(name) || STORAGE_TOOLS.test(name);
 }
 
 function killContext(context: Context, reason: string): void {
@@ -376,15 +420,27 @@ function killContext(context: Context, reason: string): void {
   releaseBrowserIfIdle(context.backend);
 }
 
-function closeContext(id: string): boolean {
+// A session context saves its state before it closes, after any call still in
+// its queue. A dead context has no browser state left to save.
+async function closeContext(id: string): Promise<{ closed: boolean; session?: string }> {
   const context = contexts.get(id);
-  if (!context) return false;
+  if (!context) return { closed: false };
   contexts.delete(id);
   context.client.onclose = undefined;
-  if (!context.dead) void context.client.close().catch(() => {});
-  releaseBrowserIfIdle(context.backend);
-  log(`closed ${id}`);
-  return true;
+  const { session } = context;
+  try {
+    if (session === undefined) return { closed: true };
+    if (context.dead) throw new Error(context.dead.reason);
+    await saveSession(context, session);
+    log(`saved session ${session}`);
+    return { closed: true, session };
+  } catch (error) {
+    throw new ApiError(500, `closed ${id}, but session ${session} was not saved: ${message(error)}`);
+  } finally {
+    if (!context.dead) void context.client.close().catch(() => {});
+    releaseBrowserIfIdle(context.backend);
+    log(`closed ${id}`);
+  }
 }
 
 function releaseBrowserIfIdle(name: BackendName): void {
@@ -405,7 +461,7 @@ function sweep(): void {
     }
     if (context.inFlight === 0 && now - context.lastActivity > IDLE_MS) {
       log(`context ${context.id} idle for ${IDLE_MS / 1000}s`);
-      closeContext(context.id);
+      void closeContext(context.id).catch((error) => log(message(error)));
     }
   }
   for (const state of browsers.values()) {
@@ -438,6 +494,7 @@ async function describeContexts(): Promise<{ contexts: unknown[] }> {
   const described = await Promise.all(live.map(async (context) => ({
     id: context.id,
     backend: context.backend,
+    session: context.session ?? null,
     ageSeconds: Math.round((Date.now() - context.createdAt) / 1000),
     idleSeconds: Math.round((Date.now() - context.lastActivity) / 1000),
     busy: context.inFlight > 0,
@@ -475,7 +532,11 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     const body = await readBody(request);
     const backend = body.backend;
     if (backend !== 'chromium' && backend !== 'firefox') throw new ApiError(400, `unknown backend ${JSON.stringify(backend)}`);
-    return send(response, 200, await openContext(backend));
+    const { session } = body;
+    if (session !== undefined && (typeof session !== 'string' || !SESSION_NAME.test(session))) {
+      throw new ApiError(400, `session names use only a-z, 0-9 and -, got ${JSON.stringify(session)}`);
+    }
+    return send(response, 200, await openContext(backend, session));
   }
 
   const call = url.match(/^\/contexts\/(c[0-9a-f]{16})\/call$/);
@@ -491,7 +552,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
   if (request.method === 'POST' && tools) return send(response, 200, await listTools(tools[1]));
 
   const single = url.match(/^\/contexts\/(c[0-9a-f]{16})$/);
-  if (request.method === 'DELETE' && single) return send(response, 200, { id: single[1], closed: closeContext(single[1]) });
+  if (request.method === 'DELETE' && single) return send(response, 200, { id: single[1], ...await closeContext(single[1]) });
 
   throw new ApiError(404, `no route for ${request.method} ${url}`);
 }
@@ -572,13 +633,15 @@ async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   log('shutting down');
-  for (const id of [...contexts.keys()]) closeContext(id);
+  await Promise.all([...contexts.keys()].map((id) => closeContext(id).catch((error) => log(message(error)))));
   await Promise.all([...browsers.values()].filter((state) => state.running).map((state) => state.stop()));
   process.exit(0);
 }
 
 function start(): void {
   mkdirSync(OUTPUT_ROOT, { recursive: true });
+  mkdirSync(SESSION_ROOT, { recursive: true, mode: 0o700 });
+  chmodSync(SESSION_ROOT, 0o700);
   const seedFile = join(ROOT, 'fingerprint-seed');
   try {
     readFileSync(seedFile);

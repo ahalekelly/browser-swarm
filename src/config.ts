@@ -10,6 +10,8 @@ export const CALL_DEADLINE_MS = 120_000;
 export const IDLE_MS = 300_000;
 
 export const TOKEN_FILE = join(ROOT, 'controller-token');
+// Saved sessions are credentials: the directory is 0700 and each file 0600.
+export const SESSION_ROOT = join(ROOT, 'sessions');
 export const SERVICE_HINT = process.platform === 'darwin'
   ? 'launchctl kickstart -k gui/$UID/com.browser-swarm.controller'
   : 'systemctl --user start browser-swarm';

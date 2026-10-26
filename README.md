@@ -33,6 +33,24 @@ Exit codes: 0 success, 1 the tool reported an error, 2 usage, 3 controller or tr
 
 `./swarm ls` lists open contexts with age, idle time, output dir and page URLs. `./swarm status` reports each browser and the last crash.
 
+### Saved sessions
+
+`./swarm open [firefox] --session <name>` opens an isolated context preloaded with the cookies and localStorage saved under `<name>`. Closing it, or idle expiry, saves its state back, so refreshed cookies persist. A new name starts logged out and is created on close. Contexts opened without `--session` never see saved state. Several contexts may share a session; the last to close wins. Names use `a-z`, `0-9` and `-`. A close that cannot save exits 3.
+
+Sessions are credentials. They live in `sessions/<name>.json` in the checkout (gitignored, directory mode 700, files 600); delete a file to forget a session. The modes keep out other users, not agents running as you. The controller withholds Playwright MCP's cookie, localStorage and storage-state tools, so HttpOnly session cookies stay out of agent transcripts; page scripts and `evaluate` still see ordinary cookies and localStorage.
+
+A human logs in, never an agent. `swarm login` opens a page in a session context, keeps it alive while you log in through DevTools, and saves the session when you press Enter. From another machine, tunnel the CDP port and run it over the same SSH connection:
+
+```sh
+ssh -t -L 9377:127.0.0.1:9377 <host> <checkout>/swarm login facebook https://www.facebook.com/login
+```
+
+1. In a Chromium-based browser (Chrome, Vivaldi), open `chrome://inspect/#devices`, check **Discover network targets**, and add `localhost:9377` under **Configure…**.
+2. Under **Remote Target**, find the page on your login URL and click **inspect fallback** (or **inspect**, which downloads the DevTools build matching the remote Chromium). DevTools shows the page live on its left; click and type into it there. The list holds every agent's pages, so pick only yours.
+3. Log in, finish 2FA, then press Enter in the terminal.
+
+The tunnel keeps port 9377 loopback-only on the host. While it is up, anything on your machine that reaches local port 9377 can drive the shared browser, so close it after logging in.
+
 The controller runs as a user service, so starting and stopping it belongs to the service manager:
 
 ```sh
@@ -89,7 +107,9 @@ Both families splice [agent-prompt.md](agent-prompt.md) and the harness's own to
 
 **Two tools are withheld.** `browser_run_code_unsafe` executes arbitrary JavaScript in the Playwright process and is RCE-equivalent; `browser_close` disposes backend state without closing the supplied context, so it would collide with `swarm <id> close`. `@playwright/mcp` 0.0.79 filters tools only by capability and both are `core` tools, so the controller drops them from `tools/list` and refuses them in `tools/call`. The Codex adapter adds back a `browser_close` that means "close this context".
 
-**Artifacts.** Each context gets `/tmp/claude/swarm/<id>/` as both its output dir and its working directory, which is the workspace root Playwright MCP restricts file access to. Results link an artifact relative to that root (`[screenshot](./page-….png)`); 0.0.79 has no absolute-path mode, so the prompt tells agents to resolve links against the output dir. Screenshots use `imageResponses: 'omit'`, so the result is a path an agent reads with its own image-capable tool. Output dirs outlive their contexts, and a result over 200 lines is saved there in full and previewed in the first 100 lines. Context ids are 16 hex characters because those dirs make ids collide over the controller's whole history, not just among live contexts.
+**Artifacts.** Each context gets `/tmp/claude/swarm/<id>/` (mode 700) as both its output dir and its working directory, which is the workspace root Playwright MCP restricts file access to. Results link an artifact relative to that root (`[screenshot](./page-….png)`); 0.0.79 has no absolute-path mode, so the prompt tells agents to resolve links against the output dir. Screenshots use `imageResponses: 'omit'`, so the result is a path an agent reads with its own image-capable tool. Output dirs outlive their contexts, and a result over 200 lines is saved there in full and previewed in the first 100 lines. Context ids are 16 hex characters because those dirs make ids collide over the controller's whole history, not just among live contexts.
+
+**Saved sessions.** A session context's child gets `--storage-state sessions/<name>.json` when that file exists, and `--caps storage`. On close the controller queues `browser_storage_state` behind any running call; 0.0.79 writes only inside the workspace, so the export lands in the output dir and the controller moves it into `sessions/` through a temp file and a rename, so concurrent closes never leave a torn file. The `storage` capability also adds cookie, localStorage and sessionStorage tools that would show the agent HttpOnly session cookies, so the controller withholds all of them. Both backends create isolated contexts through the same `newContext` call, so sessions work on either; `swarm login` uses Chromium because only its CDP port serves `chrome://inspect`.
 
 **Stable Chromium fingerprint.** One random fingerprint seed persists across Chromium restarts, so all contexts present the same device identity. Firefox has no fingerprint modifications; it is the fallback engine.
 

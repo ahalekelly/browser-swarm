@@ -269,17 +269,106 @@ test('each context gets its own output dir as its workspace root', async (t) => 
   assert.deepEqual(new Set(launches.map((launch) => launch.cwd)), new Set(opened.map((response) => response.body.outputDir)));
 });
 
+test('a session context starts from its saved state and saves back on close', async (t) => {
+  const fixture = await createFixture(t);
+  const argsDir = path.join(fixture.dir, 'args');
+  fs.mkdirSync(argsDir);
+  const controller = await startController(t, fixture, { FAKE_ARGS_DIR: argsDir });
+  const sessions = path.join(fixture.dir, 'sessions');
+  const saved = path.join(sessions, 'shop.json');
+  const visited = () => JSON.parse(fs.readFileSync(saved, 'utf8')).cookies.map((cookie) => cookie.value);
+  const use = async (url) => {
+    const opened = (await controller.call('POST', '/contexts', { backend: 'chromium', session: 'shop' })).body;
+    await controller.call('POST', `/contexts/${opened.id}/call`, { name: 'browser_navigate', arguments: { url } });
+    const closed = await controller.call('DELETE', `/contexts/${opened.id}`);
+    assert.deepEqual(closed.body, { id: opened.id, closed: true, session: 'shop' });
+    assert.deepEqual(fs.readdirSync(opened.outputDir), [], 'the exported state was left in the output dir');
+    return opened;
+  };
+
+  const first = await use('https://example.com/login');
+  assert.deepEqual(first.session, { name: 'shop', existing: false });
+  assert.deepEqual(visited(), ['https://example.com/login']);
+  assert.equal(fs.statSync(sessions).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(saved).mode & 0o777, 0o600);
+
+  const second = await use('https://example.com/inbox');
+  assert.deepEqual(second.session, { name: 'shop', existing: true });
+  assert.deepEqual(visited(), ['https://example.com/login', 'https://example.com/inbox']);
+
+  const plain = (await controller.call('POST', '/contexts', { backend: 'chromium' })).body;
+  assert.equal(plain.session, undefined);
+  await controller.call('DELETE', `/contexts/${plain.id}`);
+  assert.deepEqual(fs.readdirSync(sessions), ['shop.json']);
+
+  const launches = fs.readdirSync(argsDir).map((name) => JSON.parse(fs.readFileSync(path.join(argsDir, name), 'utf8')).argv.slice(7));
+  assert.deepEqual(launches.sort(), [[], ['--caps', 'storage'], ['--caps', 'storage', '--storage-state', saved]]);
+});
+
+test('an idle session context saves its state as it expires', async (t) => {
+  const fixture = await createFixture(t, { IDLE_MS: 400 });
+  const controller = await startController(t, fixture);
+  const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium', session: 'shop' })).body;
+  await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_navigate', arguments: { url: 'https://example.com/' } });
+
+  await eventually(() => controller.log().includes('saved session shop'), 5000, 'session save on expiry');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(fixture.dir, 'sessions/shop.json'), 'utf8')).cookies.length, 1);
+});
+
+test('SIGTERM saves open session contexts before exiting', async (t) => {
+  const fixture = await createFixture(t);
+  const controller = await startController(t, fixture);
+  const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium', session: 'shop' })).body;
+  await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_navigate', arguments: { url: 'https://example.com/' } });
+
+  await controller.stop();
+  assert.equal(JSON.parse(fs.readFileSync(path.join(fixture.dir, 'sessions/shop.json'), 'utf8')).cookies.length, 1);
+});
+
+test('a session that cannot be saved fails its close loudly', async (t) => {
+  const fixture = await createFixture(t, { SAVE_DEADLINE_MS: 500 });
+  const controller = await startController(t, fixture, { FAKE_SAVE_HANG: '1' });
+  const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium', session: 'shop' })).body;
+
+  const closed = await controller.call('DELETE', `/contexts/${id}`);
+  assert.equal(closed.status, 500);
+  assert.match(closed.body.error, new RegExp(`closed ${id}, but session shop was not saved`));
+  assert.equal(fs.existsSync(path.join(fixture.dir, 'sessions/shop.json')), false);
+  assert.deepEqual((await controller.call('GET', '/contexts')).body.contexts, []);
+});
+
+test('session names are validated and storage tools stay controller-only', async (t) => {
+  const fixture = await createFixture(t);
+  const controller = await startController(t, fixture);
+
+  for (const session of ['../escape', 'Shop', '', 'a/b', 7]) {
+    const refused = await controller.call('POST', '/contexts', { backend: 'chromium', session });
+    assert.equal(refused.status, 400, JSON.stringify(session));
+    assert.match(refused.body.error, /session names use only/);
+  }
+
+  const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium', session: 'shop-2' })).body;
+  const tools = (await controller.call('POST', `/contexts/${id}/tools`)).body.tools.map((tool) => tool.name);
+  assert.deepEqual(tools, ['browser_navigate', 'browser_tabs', 'browser_take_screenshot']);
+  for (const name of ['browser_cookie_list', 'browser_storage_state']) {
+    const refused = await controller.call('POST', `/contexts/${id}/call`, { name, arguments: {} });
+    assert.equal(refused.status, 400);
+    assert.match(refused.body.error, /not available through BrowserSwarm/);
+  }
+});
+
 test('the Firefox backend runs its own browser and contexts', async (t) => {
   const fixture = await createFixture(t);
   installFakeFirefox(fixture.dir);
   const controller = await startController(t, fixture);
 
-  const opened = await controller.call('POST', '/contexts', { backend: 'firefox' });
+  const opened = await controller.call('POST', '/contexts', { backend: 'firefox', session: 'shop' });
   assert.equal(opened.status, 200, JSON.stringify(opened.body));
   assert.equal((await controller.call('POST', `/contexts/${opened.body.id}/call`, { name: 'browser_tabs', arguments: {} })).status, 200);
 
   const status = (await controller.call('GET', '/status')).body;
   assert.deepEqual(status.browsers.map((browser) => [browser.backend, browser.running, browser.contexts]), [['firefox', true, 1]]);
+  assert.equal((await controller.call('DELETE', `/contexts/${opened.body.id}`)).body.session, 'shop');
 });
 
 test('the API refuses anything but an authorized, well-formed request', async (t) => {

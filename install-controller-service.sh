@@ -46,6 +46,9 @@ Description=BrowserSwarm controller
 ExecStart=$NODE $DIR/src/controller.ts
 Restart=always
 RestartSec=2
+# SIGTERM reaches only the controller, which saves session contexts through
+# their Playwright MCP children before stopping them and the browsers.
+KillMode=mixed
 
 [Install]
 WantedBy=default.target

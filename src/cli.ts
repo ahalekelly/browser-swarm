@@ -6,9 +6,15 @@ import { serveMcp } from './mcp.ts';
 
 const ID = /^c[0-9a-f]{16}$/;
 const PREVIEW_LINES = 100;
+// Comfortably inside the controller's five-minute idle lease.
+const LOGIN_RENEW_MS = 60_000;
 
 const USAGE = `usage:
-  swarm open [chromium|firefox]   open a context; prints its id
+  swarm open [chromium|firefox] [--session <name>]
+                                  open a context, optionally with a saved
+                                  session; prints its id
+  swarm login <session> <url>     open <url> in a session context for a human
+                                  to log in; Enter saves the session
   swarm ls                        list open contexts
   swarm status                    browsers, contexts, last crash
   swarm <id> tools                available tools
@@ -41,7 +47,7 @@ async function run(args: string[]): Promise<void> {
   if (verb === undefined) throw new UsageError(`${first}: no tool or verb`);
   if (verb === 'close') {
     const result = await api('DELETE', `/contexts/${first}`);
-    console.error(result.closed ? `closed ${first}` : `${first} was already closed`);
+    console.error(result.closed ? `closed ${first}${result.session ? `, saved session ${result.session}` : ''}` : `${first} was already closed`);
     return;
   }
   if (verb === 'tools') return await printTools(first);
@@ -59,19 +65,30 @@ async function command(verb: string, args: string[]): Promise<void> {
     return await serveMcp(backend);
   }
   if (verb === 'open') {
-    const backend = args[0] ?? 'chromium';
+    const rest = [...args];
+    const flag = rest.indexOf('--session');
+    const session = flag === -1 ? undefined : rest.splice(flag, 2)[1];
+    if (flag !== -1 && session === undefined) throw new UsageError('--session takes a name');
+    const [backend = 'chromium', ...extra] = rest;
     if (backend !== 'chromium' && backend !== 'firefox') throw new UsageError(`unknown backend ${backend}`);
-    const result = await api('POST', '/contexts', { backend });
+    if (extra.length > 0) throw new UsageError(`unexpected ${extra.join(' ')}`);
+    const result = await api('POST', '/contexts', { backend, session }) as Opened;
     console.log(result.id);
     console.error(`output: ${result.outputDir}`);
+    if (result.session) console.error(`session: ${result.session.name}${result.session.existing ? '' : ' (new, starts logged out)'}`);
     return;
+  }
+  if (verb === 'login') {
+    if (args.length !== 2) throw new UsageError('login takes a session name and a URL');
+    return await login(args[0], args[1]);
   }
   if (verb === 'ls') {
     const { contexts } = await api('GET', '/contexts') as { contexts: ContextInfo[] };
     if (contexts.length === 0) return console.log('no open contexts');
     for (const context of contexts) {
       const state = context.busy ? 'busy' : `idle ${context.idleSeconds}s`;
-      console.log(`${context.id}  ${context.backend}  age ${context.ageSeconds}s  ${state}  ${context.outputDir}`);
+      const session = context.session ? `  session ${context.session}` : '';
+      console.log(`${context.id}  ${context.backend}${session}  age ${context.ageSeconds}s  ${state}  ${context.outputDir}`);
       for (const page of context.pages ?? []) console.log(`    ${page}`);
     }
     return;
@@ -89,6 +106,30 @@ async function command(verb: string, args: string[]): Promise<void> {
     return;
   }
   throw new UsageError(`unknown command ${verb}`);
+}
+
+// A human logs in through DevTools, which renews no lease, so this keeps the
+// context alive until they press Enter and then closes it, which saves it.
+async function login(session: string, url: string): Promise<void> {
+  if (!process.stdin.isTTY) throw new UsageError('login waits for Enter on a terminal; over SSH, pass -t');
+  const { id } = await api('POST', '/contexts', { backend: 'chromium', session }) as Opened;
+  const navigated = await api('POST', `/contexts/${id}/call`, { name: 'browser_navigate', arguments: { url } }) as CallResult;
+  if (navigated.isError) {
+    await api('DELETE', `/contexts/${id}`);
+    return fail(1, `could not open ${url}: ${navigated.text}`);
+  }
+  console.error(`Context ${id} is on ${url}. Open it in chrome://inspect (see the BrowserSwarm README), log in, then press Enter here to save session ${session}.`);
+  const renew = setInterval(() => {
+    api('POST', `/contexts/${id}/call`, { name: 'browser_tabs', arguments: { action: 'list' } }).catch((error: ApiError) => {
+      fail(exitFor(error.status), `${error.message}\nSession ${session} was not saved; run login again.`);
+      process.exit();
+    });
+  }, LOGIN_RENEW_MS);
+  await new Promise((resolveEnter) => process.stdin.once('data', resolveEnter));
+  clearInterval(renew);
+  process.stdin.destroy();
+  await api('DELETE', `/contexts/${id}`);
+  console.error(`saved session ${session}`);
 }
 
 async function printTools(id: string): Promise<void> {
@@ -133,7 +174,8 @@ async function callTool(id: string, name: string, args: string[]): Promise<void>
   if (result.isError) process.exitCode = 1;
 }
 
-type ContextInfo = { id: string; backend: string; ageSeconds: number; idleSeconds: number; busy: boolean; outputDir: string; pages: string[] | null };
+type Opened = { id: string; outputDir: string; session?: { name: string; existing: boolean } };
+type ContextInfo = { id: string; backend: string; session: string | null; ageSeconds: number; idleSeconds: number; busy: boolean; outputDir: string; pages: string[] | null };
 type BrowserInfo = { backend: string; running: boolean; pid: number | null; upSeconds: number | null; contexts: number; lastCrash: string | null };
 type Tool = { name: string; description?: string; inputSchema: unknown };
 type CallResult = { text: string; isError: boolean; outputDir: string; savedPath?: string };
