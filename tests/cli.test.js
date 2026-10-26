@@ -116,9 +116,18 @@ test('login opens the page, waits for Enter, and saves the session', async (t) =
   // login insists on a terminal, so `script` gives it one; its output arrives
   // on stdout with the terminal's line endings.
   const command = [process.execPath, fixture.cli, 'login', 'shop', 'https://example.com/login'];
-  const login = process.platform === 'darwin'
+  const runLogin = () => process.platform === 'darwin'
     ? run('script', ['-q', '/dev/null', ...command], { input: '\n', env: { ...process.env, ...NO_SANDBOX_PROXY } })
     : run('script', ['-qec', command.join(' '), '/dev/null'], { input: '\n', env: { ...process.env, ...NO_SANDBOX_PROXY } });
+
+  // An open context of the session would later overwrite the new login.
+  const agent = swarm(fixture, ['open', '--session', 'shop']).stdout.trim();
+  const blocked = runLogin();
+  assert.notEqual(blocked.status, 0, blocked.stdout);
+  assert.match(blocked.stdout, new RegExp(`session shop is open in ${agent}`));
+  swarm(fixture, [agent, 'close']);
+
+  const login = runLogin();
   assert.equal(login.status, 0, login.stdout);
   assert.match(login.stdout, /is on https:\/\/example\.com\/login/);
   assert.match(login.stdout, /saved session shop/);

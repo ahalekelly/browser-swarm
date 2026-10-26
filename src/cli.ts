@@ -112,6 +112,11 @@ async function command(verb: string, args: string[]): Promise<void> {
 // context alive until they press Enter and then closes it, which saves it.
 async function login(session: string, url: string): Promise<void> {
   if (!process.stdin.isTTY) throw new UsageError('login waits for Enter on a terminal; over SSH, pass -t');
+  // An open context of this session would save its older state over the new
+  // login when it later closes or expires.
+  const { contexts } = await api('GET', '/contexts') as { contexts: ContextInfo[] };
+  const open = contexts.filter((context) => context.session === session).map((context) => context.id);
+  if (open.length > 0) return fail(1, `session ${session} is open in ${open.join(', ')}; close those contexts first`);
   const { id } = await api('POST', '/contexts', { backend: 'chromium', session }) as Opened;
   const navigated = await api('POST', `/contexts/${id}/call`, { name: 'browser_navigate', arguments: { url } }) as CallResult;
   if (navigated.isError) {
