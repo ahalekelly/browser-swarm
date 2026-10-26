@@ -110,27 +110,35 @@ async function command(verb: string, args: string[]): Promise<void> {
 
 // A human logs in through DevTools, which renews no lease, so this keeps the
 // context alive until they press Enter and then closes it, which saves it.
+// Anything else leaves the context to expire, which discards it.
 async function login(session: string, url: string): Promise<void> {
   if (!process.stdin.isTTY) throw new UsageError('login waits for Enter on a terminal; over SSH, pass -t');
   // An open context of this session would save its older state over the new
-  // login when it later closes or expires.
+  // login when it later closes.
   const { contexts } = await api('GET', '/contexts') as { contexts: ContextInfo[] };
   const open = contexts.filter((context) => context.session === session).map((context) => context.id);
   if (open.length > 0) return fail(1, `session ${session} is open in ${open.join(', ')}; close those contexts first`);
   const { id } = await api('POST', '/contexts', { backend: 'chromium', session }) as Opened;
   const navigated = await api('POST', `/contexts/${id}/call`, { name: 'browser_navigate', arguments: { url } }) as CallResult;
   if (navigated.isError) {
-    await api('DELETE', `/contexts/${id}`);
-    return fail(1, `could not open ${url}: ${navigated.text}`);
+    return fail(1, `could not open ${url}: ${navigated.text}\nSession ${session} is unchanged; context ${id} expires unsaved.`);
   }
   console.error(`Context ${id} is on ${url}. Open it in chrome://inspect (see the BrowserSwarm README), log in, then press Enter here to save session ${session}.`);
+  // A renewal still in flight when Enter starts the close fails harmlessly.
+  let closing = false;
   const renew = setInterval(() => {
     api('POST', `/contexts/${id}/call`, { name: 'browser_tabs', arguments: { action: 'list' } }).catch((error: ApiError) => {
+      if (closing) return;
       fail(exitFor(error.status), `${error.message}\nSession ${session} was not saved; run login again.`);
       process.exit();
     });
   }, LOGIN_RENEW_MS);
-  await new Promise((resolveEnter) => process.stdin.once('data', resolveEnter));
+  // Ctrl-D or a closed terminal counts as Enter rather than waiting forever.
+  await new Promise((resolveEnter) => {
+    process.stdin.once('data', resolveEnter);
+    process.stdin.once('end', resolveEnter);
+  });
+  closing = true;
   clearInterval(renew);
   process.stdin.destroy();
   await api('DELETE', `/contexts/${id}`);

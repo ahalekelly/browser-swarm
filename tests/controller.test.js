@@ -305,32 +305,42 @@ test('a session context starts from its saved state and saves back on close', as
   assert.deepEqual(launches.sort(), [[], ['--caps', 'storage'], ['--caps', 'storage', '--storage-state', saved]]);
 });
 
-test('an idle session context saves its state as it expires', async (t) => {
+// Only an explicit close saves, so an abandoned context (an aborted login,
+// say) leaves the saved session as it was.
+test('expiry and shutdown discard a session context unsaved', async (t) => {
   const fixture = await createFixture(t, { IDLE_MS: 400 });
   const controller = await startController(t, fixture);
-  const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium', session: 'shop' })).body;
-  await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_navigate', arguments: { url: 'https://example.com/' } });
+  const saved = path.join(fixture.dir, 'sessions/shop.json');
+  const open = async (url) => {
+    const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium', session: 'shop' })).body;
+    await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_navigate', arguments: { url } });
+    return id;
+  };
+  await controller.call('DELETE', `/contexts/${await open('https://example.com/kept')}`);
+  const before = fs.readFileSync(saved, 'utf8');
 
-  await eventually(() => controller.log().includes('saved session shop'), 5000, 'session save on expiry');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(fixture.dir, 'sessions/shop.json'), 'utf8')).cookies.length, 1);
-});
+  const expiring = await open('https://example.com/abandoned');
+  await eventually(() => controller.log().includes(`context ${expiring} idle`), 5000, 'expiry');
+  await eventually(async () => (await controller.call('GET', '/contexts')).body.contexts.length === 0, 5000, 'expiry close');
+  assert.equal(fs.readFileSync(saved, 'utf8'), before);
 
-test('SIGTERM saves open session contexts before exiting', async (t) => {
-  const fixture = await createFixture(t);
-  const controller = await startController(t, fixture);
-  const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium', session: 'shop' })).body;
-  await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_navigate', arguments: { url: 'https://example.com/' } });
-
+  await open('https://example.com/interrupted');
   await controller.stop();
-  assert.equal(JSON.parse(fs.readFileSync(path.join(fixture.dir, 'sessions/shop.json'), 'utf8')).cookies.length, 1);
+  assert.equal(fs.readFileSync(saved, 'utf8'), before);
+  assert.deepEqual(fs.readdirSync(path.dirname(saved)), ['shop.json']);
 });
 
 test('a session that cannot be saved fails its close loudly', async (t) => {
-  const fixture = await createFixture(t, { SAVE_DEADLINE_MS: 500 });
+  const fixture = await createFixture(t, { SAVE_DEADLINE_MS: 1500 });
   const controller = await startController(t, fixture, { FAKE_SAVE_HANG: '1' });
   const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium', session: 'shop' })).body;
 
-  const closed = await controller.call('DELETE', `/contexts/${id}`);
+  const closing = controller.call('DELETE', `/contexts/${id}`);
+  // A saving context stays listed and refuses new work and a second close.
+  await eventually(async () => (await controller.call('GET', '/contexts')).body.contexts[0]?.busy === true, 2000, 'save start');
+  assert.equal((await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_tabs', arguments: {} })).status, 410);
+  assert.deepEqual((await controller.call('DELETE', `/contexts/${id}`)).body, { id, closed: false });
+  const closed = await closing;
   assert.equal(closed.status, 500);
   assert.match(closed.body.error, new RegExp(`closed ${id}, but session shop was not saved`));
   assert.equal(fs.existsSync(path.join(fixture.dir, 'sessions/shop.json')), false);

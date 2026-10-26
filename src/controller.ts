@@ -4,7 +4,7 @@
 // harness and harnesses have nothing to share between subagents.
 import { spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer, get, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import { CALL_DEADLINE_MS, IDLE_MS, OUTPUT_ROOT, PORT, ROOT, SESSION_ROOT, TOKEN_FILE } from './config.ts';
@@ -66,6 +66,7 @@ type Context = {
   inFlight: number;
   queue: Promise<void>;
   dead?: { reason: string; at: number };
+  closing: boolean;
 };
 
 class ApiError extends Error {
@@ -284,6 +285,7 @@ async function openContext(name: BackendName, session?: string): Promise<{ id: s
     // context that has not finished opening.
     inFlight: 1,
     queue: Promise.resolve(),
+    closing: false,
   };
   contexts.set(id, context);
   browserState(name).idleSince = undefined;
@@ -339,17 +341,22 @@ async function saveSession(context: Context, session: string): Promise<void> {
     { timeout: SAVE_DEADLINE_MS },
   ));
   if (result.isError) throw new Error(`browser_storage_state failed: ${JSON.stringify(result.content)}`);
-  const state = readFileSync(exported);
-  unlinkSync(exported);
   const temporary = join(SESSION_ROOT, `.${session}.${context.id}.tmp`);
-  writeFileSync(temporary, state, { mode: 0o600 });
-  renameSync(temporary, sessionFile(session));
+  try {
+    writeFileSync(temporary, readFileSync(exported), { mode: 0o600 });
+    renameSync(temporary, sessionFile(session));
+  } catch (error) {
+    rmSync(temporary, { force: true });
+    throw error;
+  }
+  unlinkSync(exported);
 }
 
 function liveContext(id: string): Context {
   const context = contexts.get(id);
   if (!context) throw new ApiError(404, `unknown context ${id} — it was closed, expired, or belongs to an earlier controller`);
   if (context.dead) throw new ApiError(410, context.dead.reason);
+  if (context.closing) throw new ApiError(410, `context ${id} is closing`);
   return context;
 }
 
@@ -420,16 +427,19 @@ function killContext(context: Context, reason: string): void {
   releaseBrowserIfIdle(context.backend);
 }
 
-// A session context saves its state before it closes, after any call still in
-// its queue. A dead context has no browser state left to save.
-async function closeContext(id: string): Promise<{ closed: boolean; session?: string }> {
+// An explicit close saves a session context's state, after any call still in
+// its queue; expiry and shutdown discard it, so an abandoned context (an
+// aborted login, say) never overwrites the saved session. The context stays
+// listed while it saves, so `ls` and `swarm login` see it until the file is final.
+// A dead context has no browser state left to save.
+async function closeContext(id: string, save: boolean): Promise<{ closed: boolean; session?: string }> {
   const context = contexts.get(id);
-  if (!context) return { closed: false };
-  contexts.delete(id);
+  if (!context || context.closing) return { closed: false };
+  context.closing = true;
   context.client.onclose = undefined;
   const { session } = context;
   try {
-    if (session === undefined) return { closed: true };
+    if (session === undefined || !save) return { closed: true };
     if (context.dead) throw new Error(context.dead.reason);
     await saveSession(context, session);
     log(`saved session ${session}`);
@@ -437,6 +447,7 @@ async function closeContext(id: string): Promise<{ closed: boolean; session?: st
   } catch (error) {
     throw new ApiError(500, `closed ${id}, but session ${session} was not saved: ${message(error)}`);
   } finally {
+    contexts.delete(id);
     if (!context.dead) void context.client.close().catch(() => {});
     releaseBrowserIfIdle(context.backend);
     log(`closed ${id}`);
@@ -459,9 +470,9 @@ function sweep(): void {
       if (now - context.dead.at > DEAD_RETENTION_MS) contexts.delete(context.id);
       continue;
     }
-    if (context.inFlight === 0 && now - context.lastActivity > IDLE_MS) {
+    if (!context.closing && context.inFlight === 0 && now - context.lastActivity > IDLE_MS) {
       log(`context ${context.id} idle for ${IDLE_MS / 1000}s`);
-      void closeContext(context.id).catch((error) => log(message(error)));
+      void closeContext(context.id, false);
     }
   }
   for (const state of browsers.values()) {
@@ -552,7 +563,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
   if (request.method === 'POST' && tools) return send(response, 200, await listTools(tools[1]));
 
   const single = url.match(/^\/contexts\/(c[0-9a-f]{16})$/);
-  if (request.method === 'DELETE' && single) return send(response, 200, { id: single[1], ...await closeContext(single[1]) });
+  if (request.method === 'DELETE' && single) return send(response, 200, { id: single[1], ...await closeContext(single[1], true) });
 
   throw new ApiError(404, `no route for ${request.method} ${url}`);
 }
@@ -633,7 +644,7 @@ async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   log('shutting down');
-  await Promise.all([...contexts.keys()].map((id) => closeContext(id).catch((error) => log(message(error)))));
+  for (const id of [...contexts.keys()]) void closeContext(id, false);
   await Promise.all([...browsers.values()].filter((state) => state.running).map((state) => state.stop()));
   process.exit(0);
 }
