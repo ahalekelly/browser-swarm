@@ -28,11 +28,11 @@ Where a browser isn't strictly required, the more reliable path is not to drive 
 
 Its main fork, cloakbrowser, scores the same overall headless on the same targets, differing only on which individual sites render; the upstream is slightly lighter. The persistent fingerprint seed derives GPU vendor and renderer values. Current builds removed the manual GPU flags.
 
-[`tests/fingerprint-compare.mjs`](../tests/fingerprint-compare.mjs) compares browser configurations side by side with one fingerprint seed. All configs stay open for the whole run; each round visits every target once per config, rotating config order, so network conditions and IP reputation hit every config alike. `macos`, `windows`, and `linux` run fingerprint-chromium headless with that platform; `linux-headed` runs the Linux fingerprint in a 1920×1080 Xvfb display. `chrome` and `chrome-headed` run Google Chrome stable (`/usr/bin/google-chrome-stable`, Linux only) headless or in Xvfb, on the host GPU through Vulkan. `stock` runs Playwright's bundled Chromium without fingerprint flags; install it with `node_modules/.bin/playwright install chromium`. Headed configs need `xvfb-run` and `Xvfb` on `PATH`. Each trial gets a fresh context and appends its result to JSONL before the next delay. The completed run renders a Markdown report:
+[`tests/fingerprint-compare.mjs`](../tests/fingerprint-compare.mjs) compares browser configurations side by side with one fingerprint seed. All configs stay open for the whole run; each round visits every target once per config, rotating config order, so network conditions and IP reputation hit every config alike. `macos`, `windows`, and `linux` run fingerprint-chromium headless with that platform, and `linux-headed` runs the Linux fingerprint headed. `chrome` and `chrome-headed` run Google Chrome stable (`/usr/bin/google-chrome-stable`, Linux only) on the host GPU through Vulkan. `firefox` and `firefox-headed` run Playwright's Firefox the way the Firefox backend does. `stock` runs Playwright's bundled Chromium without fingerprint flags; install it with `node_modules/.bin/playwright install chromium`. Headed configs draw on the inherited `DISPLAY`, so run them under `xvfb-run -a -s '-screen 0 1920x1080x24'`; headless configs launch without `DISPLAY`, since headless Firefox gains WebGL when one is set. Each trial gets a fresh context and appends its result to JSONL before the next delay. The completed run renders a Markdown report:
 
 ```sh
-node tests/fingerprint-compare.mjs run \
-  --configs chrome-headed,chrome,macos \
+xvfb-run -a -s '-screen 0 1920x1080x24' node tests/fingerprint-compare.mjs run \
+  --configs chrome-headed,chrome,firefox-headed,firefox \
   --targets cloudflare-challenge,datadome-leboncoin,datadome-stacked-hermes,perimeterx-therealreal,akamai-homedepot \
   --trials-per-target 20 \
   --spacing-seconds 15 \
