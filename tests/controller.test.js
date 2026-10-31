@@ -20,7 +20,7 @@ test('a context opens, works, and closes idempotently', async (t) => {
   const fixture = await createFixture(t);
   const controller = await startController(t, fixture);
 
-  const opened = await controller.call('POST', '/contexts', { backend: 'chromium' });
+  const opened = await controller.call('POST', '/contexts', { backend: 'chrome' });
   assert.equal(opened.status, 200);
   assert.match(opened.body.id, /^c[0-9a-f]{16}$/);
   assert.equal(opened.body.outputDir, path.join(fixture.output, opened.body.id));
@@ -31,7 +31,7 @@ test('a context opens, works, and closes idempotently', async (t) => {
     arguments: { url: 'https://example.com/one' },
   });
   assert.equal(called.status, 200);
-  assert.equal(called.body.text, 'navigated to https://example.com/one');
+  assert.equal(called.body.text, 'navigated to https://example.com/one\n### Page\n- Page URL: https://example.com/one\n- Page Title: Fake page');
   assert.equal(called.body.isError, false);
 
   assert.deepEqual((await controller.call('DELETE', `/contexts/${opened.body.id}`)).body, { id: opened.body.id, closed: true });
@@ -43,7 +43,7 @@ test('a context opens, works, and closes idempotently', async (t) => {
 test('the dangerous and lifecycle-colliding tools are hidden and refused', async (t) => {
   const fixture = await createFixture(t);
   const controller = await startController(t, fixture);
-  const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium' })).body;
+  const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body;
 
   const tools = (await controller.call('POST', `/contexts/${id}/tools`)).body.tools.map((tool) => tool.name);
   assert.deepEqual(tools, ['browser_navigate', 'browser_tabs', 'browser_take_screenshot']);
@@ -59,10 +59,10 @@ test('simultaneous opens share one browser and stay isolated', async (t) => {
   const fixture = await createFixture(t);
   const controller = await startController(t, fixture);
 
-  const opened = await Promise.all([0, 1, 2, 3].map(() => controller.call('POST', '/contexts', { backend: 'chromium' })));
+  const opened = await Promise.all([0, 1, 2, 3].map(() => controller.call('POST', '/contexts', { backend: 'chrome' })));
   const ids = opened.map((response) => response.body.id);
   assert.equal(new Set(ids).size, 4, 'ids collided');
-  assert.equal(await browserConnections(fixture.ports.chromium), 4);
+  assert.equal(await browserConnections(fixture.ports.chrome), 4);
   assert.equal(controller.log().match(/starting shared Chromium browser/g).length, 1, 'more than one browser was launched');
 
   await Promise.all(ids.map((id, index) => controller.call('POST', `/contexts/${id}/call`, {
@@ -80,8 +80,8 @@ test('calls to one context run one at a time while other contexts run concurrent
   const fixture = await createFixture(t);
   const controller = await startController(t, fixture);
   const [first, second] = await Promise.all([
-    controller.call('POST', '/contexts', { backend: 'chromium' }),
-    controller.call('POST', '/contexts', { backend: 'chromium' }),
+    controller.call('POST', '/contexts', { backend: 'chrome' }),
+    controller.call('POST', '/contexts', { backend: 'chrome' }),
   ]);
 
   const slow = (id, ms) => controller.call('POST', `/contexts/${id}/call`, { name: 'browser_slow', arguments: { ms } });
@@ -100,7 +100,7 @@ test('calls to one context run one at a time while other contexts run concurrent
 test('an in-flight call suspends the idle lease and finishing it restarts the lease', async (t) => {
   const fixture = await createFixture(t, { IDLE_MS: 400 });
   const controller = await startController(t, fixture);
-  const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium' })).body;
+  const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body;
 
   const call = controller.call('POST', `/contexts/${id}/call`, { name: 'browser_slow', arguments: { ms: 1200 } });
   await delay(900);
@@ -114,13 +114,13 @@ test('an in-flight call suspends the idle lease and finishing it restarts the le
 test('the browser stops after its last context goes idle and restarts on the next open', async (t) => {
   const fixture = await createFixture(t, { IDLE_MS: 400 });
   const controller = await startController(t, fixture);
-  await controller.call('POST', '/contexts', { backend: 'chromium' });
+  await controller.call('POST', '/contexts', { backend: 'chrome' });
 
   await eventually(async () => !(await controller.call('GET', '/status')).body.browsers[0].running, 8000, 'browser idle stop');
   assert.match(controller.log(), /has had no contexts for .*stopping it/);
   assert.equal((await controller.call('GET', '/status')).body.browsers[0].lastCrash, null, 'a deliberate stop was recorded as a crash');
 
-  const reopened = await controller.call('POST', '/contexts', { backend: 'chromium' });
+  const reopened = await controller.call('POST', '/contexts', { backend: 'chrome' });
   assert.equal(reopened.status, 200);
   assert.equal((await controller.call('GET', '/status')).body.browsers[0].running, true);
 });
@@ -129,8 +129,8 @@ test('a call that never returns loses its context and leaves siblings working', 
   const fixture = await createFixture(t, { CALL_DEADLINE_MS: 700 });
   const controller = await startController(t, fixture);
   const [hung, sibling] = await Promise.all([
-    controller.call('POST', '/contexts', { backend: 'chromium' }),
-    controller.call('POST', '/contexts', { backend: 'chromium' }),
+    controller.call('POST', '/contexts', { backend: 'chrome' }),
+    controller.call('POST', '/contexts', { backend: 'chrome' }),
   ]);
 
   const lost = await controller.call('POST', `/contexts/${hung.body.id}/call`, { name: 'browser_hang', arguments: {} });
@@ -140,13 +140,13 @@ test('a call that never returns loses its context and leaves siblings working', 
 
   const survivor = await controller.call('POST', `/contexts/${sibling.body.id}/call`, { name: 'browser_tabs', arguments: {} });
   assert.equal(survivor.status, 200);
-  await eventually(async () => (await browserConnections(fixture.ports.chromium)) === 1, 5000, 'lost context child exit');
+  await eventually(async () => (await browserConnections(fixture.ports.chrome)) === 1, 5000, 'lost context child exit');
 });
 
 test('a rejected tool leaves the context usable', async (t) => {
   const fixture = await createFixture(t);
   const controller = await startController(t, fixture);
-  const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium' })).body;
+  const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body;
 
   const rejected = await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_nonsense', arguments: {} });
   assert.equal(rejected.status, 400);
@@ -162,7 +162,7 @@ test('a rejected tool leaves the context usable', async (t) => {
 test('a browser that dies marks its contexts dead and the next open relaunches it', async (t) => {
   const fixture = await createFixture(t);
   const controller = await startController(t, fixture);
-  const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium' })).body;
+  const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body;
   const { pid } = (await controller.call('GET', '/status')).body.browsers[0];
 
   process.kill(pid, 'SIGKILL');
@@ -174,7 +174,7 @@ test('a browser that dies marks its contexts dead and the next open relaunches i
   assert.equal(lost.status, 410);
   assert.match(lost.body.error, /exited, so context .* is lost/);
 
-  const reopened = await controller.call('POST', '/contexts', { backend: 'chromium' });
+  const reopened = await controller.call('POST', '/contexts', { backend: 'chrome' });
   assert.equal(reopened.status, 200, JSON.stringify(reopened.body));
   assert.equal((await controller.call('POST', `/contexts/${reopened.body.id}/call`, { name: 'browser_tabs', arguments: {} })).status, 200);
   assert.match((await controller.call('GET', '/status')).body.browsers[0].lastCrash, /exited unexpectedly/, 'the crash stopped being reported');
@@ -184,8 +184,8 @@ test('an MCP child that dies alone loses only its own context', async (t) => {
   const fixture = await createFixture(t);
   const controller = await startController(t, fixture);
   const [crashing, sibling] = await Promise.all([
-    controller.call('POST', '/contexts', { backend: 'chromium' }),
-    controller.call('POST', '/contexts', { backend: 'chromium' }),
+    controller.call('POST', '/contexts', { backend: 'chrome' }),
+    controller.call('POST', '/contexts', { backend: 'chrome' }),
   ]);
 
   await controller.call('POST', `/contexts/${crashing.body.id}/call`, { name: 'browser_crash', arguments: {} });
@@ -197,7 +197,7 @@ test('a slow cold start is waited out rather than restarted', async (t) => {
   const fixture = await createFixture(t, { browserStartupMs: 3000 });
   const controller = await startController(t, fixture);
 
-  const opened = await controller.call('POST', '/contexts', { backend: 'chromium' });
+  const opened = await controller.call('POST', '/contexts', { backend: 'chrome' });
   assert.equal(opened.status, 200, JSON.stringify(opened.body));
   assert.equal(controller.log().match(/starting shared Chromium browser/g).length, 1);
 });
@@ -206,11 +206,11 @@ test('a context whose MCP fails to initialize is not registered', async (t) => {
   const fixture = await createFixture(t);
   const controller = await startController(t, fixture, { FAKE_INITIALIZE_ERROR: '1' });
 
-  const failed = await controller.call('POST', '/contexts', { backend: 'chromium' });
+  const failed = await controller.call('POST', '/contexts', { backend: 'chrome' });
   assert.equal(failed.status, 500);
-  assert.match(failed.body.error, /could not start a chromium context/);
+  assert.match(failed.body.error, /could not start a chrome context/);
   assert.deepEqual((await controller.call('GET', '/contexts')).body.contexts, []);
-  await eventually(async () => (await browserConnections(fixture.ports.chromium)) === 0, 5000, 'failed child exit');
+  await eventually(async () => (await browserConnections(fixture.ports.chrome)) === 0, 5000, 'failed child exit');
 });
 
 test('repeated open/close cycles leave nothing behind', async (t) => {
@@ -218,11 +218,11 @@ test('repeated open/close cycles leave nothing behind', async (t) => {
   const controller = await startController(t, fixture);
 
   for (let cycle = 0; cycle < 6; cycle += 1) {
-    const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium' })).body;
+    const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body;
     await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_navigate', arguments: { url: `https://example.com/${cycle}` } });
     await controller.call('DELETE', `/contexts/${id}`);
   }
-  await eventually(async () => (await browserConnections(fixture.ports.chromium)) === 0, 5000, 'child cleanup');
+  await eventually(async () => (await browserConnections(fixture.ports.chrome)) === 0, 5000, 'child cleanup');
   assert.equal((await controller.call('GET', '/status')).body.contexts, 0);
   assert.equal((await controller.call('GET', '/status')).body.browsers[0].running, true, 'the browser was restarted between cycles');
 });
@@ -230,7 +230,7 @@ test('repeated open/close cycles leave nothing behind', async (t) => {
 test('a large result is previewed and saved in full', async (t) => {
   const fixture = await createFixture(t);
   const controller = await startController(t, fixture);
-  const { id, outputDir } = (await controller.call('POST', '/contexts', { backend: 'chromium' })).body;
+  const { id, outputDir } = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body;
 
   const small = await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_big', arguments: { lines: 200 } });
   assert.equal(small.body.savedPath, undefined);
@@ -243,7 +243,7 @@ test('a large result is previewed and saved in full', async (t) => {
 test('artifacts stay readable after the context closes', async (t) => {
   const fixture = await createFixture(t);
   const controller = await startController(t, fixture);
-  const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium' })).body;
+  const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body;
 
   const shot = await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_take_screenshot', arguments: {} });
   const file = shot.body.text.replace('Saved screenshot to ', '');
@@ -271,11 +271,11 @@ test('each context gets its own output dir as its workspace root', async (t) => 
   fs.mkdirSync(argsDir);
   const controller = await startController(t, fixture, { FAKE_ARGS_DIR: argsDir });
 
-  const opened = await Promise.all([0, 1].map(() => controller.call('POST', '/contexts', { backend: 'chromium' })));
+  const opened = await Promise.all([0, 1].map(() => controller.call('POST', '/contexts', { backend: 'chrome' })));
   const launches = fs.readdirSync(argsDir).map((name) => JSON.parse(fs.readFileSync(path.join(argsDir, name), 'utf8')));
   assert.equal(launches.length, 2);
   for (const launch of launches) {
-    assert.deepEqual(launch.argv.slice(0, 3), ['--cdp-endpoint', `http://127.0.0.1:${fixture.ports.chromium}`, '--isolated']);
+    assert.deepEqual(launch.argv.slice(0, 3), ['--cdp-endpoint', `http://127.0.0.1:${fixture.ports.chrome}`, '--isolated']);
     assert.deepEqual(launch.argv.slice(5), ['--image-responses', 'omit']);
     assert.equal(launch.cwd, launch.argv[4], 'the child did not run inside its output dir');
   }
@@ -292,7 +292,7 @@ test('a session context starts from its saved state and saves back on close', as
   const saved = path.join(sessions, 'shop.json');
   const visited = () => JSON.parse(fs.readFileSync(saved, 'utf8')).cookies.map((cookie) => cookie.value);
   const use = async (url) => {
-    const opened = (await controller.call('POST', '/contexts', { backend: 'chromium', session: 'shop' })).body;
+    const opened = (await controller.call('POST', '/contexts', { backend: 'chrome', session: 'shop' })).body;
     await controller.call('POST', `/contexts/${opened.id}/call`, { name: 'browser_navigate', arguments: { url } });
     const closed = await controller.call('DELETE', `/contexts/${opened.id}`);
     assert.deepEqual(closed.body, { id: opened.id, closed: true, session: 'shop' });
@@ -310,13 +310,16 @@ test('a session context starts from its saved state and saves back on close', as
   assert.deepEqual(second.session, { name: 'shop', existing: true });
   assert.deepEqual(visited(), ['https://example.com/login', 'https://example.com/inbox']);
 
-  const plain = (await controller.call('POST', '/contexts', { backend: 'chromium' })).body;
+  const plain = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body;
   assert.equal(plain.session, undefined);
   await controller.call('DELETE', `/contexts/${plain.id}`);
   assert.deepEqual(fs.readdirSync(sessions), ['shop.json']);
 
-  const launches = fs.readdirSync(argsDir).map((name) => JSON.parse(fs.readFileSync(path.join(argsDir, name), 'utf8')).argv.slice(7));
-  assert.deepEqual(launches.sort(), [[], ['--caps', 'storage'], ['--caps', 'storage', '--storage-state', saved]]);
+  const loaded = fs.readdirSync(argsDir).map((name) => {
+    const { argv } = JSON.parse(fs.readFileSync(path.join(argsDir, name), 'utf8'));
+    return argv.includes('--storage-state') ? argv[argv.indexOf('--storage-state') + 1] : null;
+  });
+  assert.deepEqual(loaded.sort(), [saved, null, null]);
 });
 
 // Only an explicit close saves, so an abandoned context (an aborted login,
@@ -326,7 +329,7 @@ test('expiry and shutdown discard a session context unsaved', async (t) => {
   const controller = await startController(t, fixture);
   const saved = path.join(fixture.dir, 'sessions/shop.json');
   const open = async (url) => {
-    const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium', session: 'shop' })).body;
+    const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome', session: 'shop' })).body;
     await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_navigate', arguments: { url } });
     return id;
   };
@@ -347,7 +350,7 @@ test('expiry and shutdown discard a session context unsaved', async (t) => {
 test('a session that cannot be saved fails its close loudly', async (t) => {
   const fixture = await createFixture(t, { SAVE_DEADLINE_MS: 1500 });
   const controller = await startController(t, fixture, { FAKE_SAVE_HANG: '1' });
-  const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium', session: 'shop' })).body;
+  const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome', session: 'shop' })).body;
 
   const closing = controller.call('DELETE', `/contexts/${id}`);
   // A saving context stays listed and refuses new work and a second close.
@@ -366,12 +369,12 @@ test('session names are validated and storage tools stay controller-only', async
   const controller = await startController(t, fixture);
 
   for (const session of ['../escape', 'Shop', '', 'a/b', 7]) {
-    const refused = await controller.call('POST', '/contexts', { backend: 'chromium', session });
+    const refused = await controller.call('POST', '/contexts', { backend: 'chrome', session });
     assert.equal(refused.status, 400, JSON.stringify(session));
     assert.match(refused.body.error, /session names use only/);
   }
 
-  const { id } = (await controller.call('POST', '/contexts', { backend: 'chromium', session: 'shop-2' })).body;
+  const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome', session: 'shop-2' })).body;
   const tools = (await controller.call('POST', `/contexts/${id}/tools`)).body.tools.map((tool) => tool.name);
   assert.deepEqual(tools, ['browser_navigate', 'browser_tabs', 'browser_take_screenshot']);
   for (const name of ['browser_cookie_list', 'browser_storage_state']) {
@@ -414,14 +417,14 @@ test('the API refuses anything but an authorized, well-formed request', async (t
   assert.equal((await send({ method: 'POST', route: '/contexts', body: { backend: 'webkit' } })).status, 400);
   assert.equal((await send({ method: 'POST', route: '/contexts', raw: '{', contentType: 'application/json' })).status, 400);
   assert.equal((await send({ method: 'POST', route: '/contexts', raw: '{}', contentType: 'text/plain' })).status, 400);
-  assert.equal((await send({ method: 'POST', route: '/contexts', raw: `{"backend":"chromium","pad":"${'x'.repeat(1024 * 1024)}"}`, contentType: 'application/json' })).status, 413);
+  assert.equal((await send({ method: 'POST', route: '/contexts', raw: `{"backend":"chrome","pad":"${'x'.repeat(1024 * 1024)}"}`, contentType: 'application/json' })).status, 413);
   assert.deepEqual((await controller.call('GET', '/contexts')).body.contexts, []);
 });
 
 test('SIGTERM closes every context and stops the browser', async (t) => {
   const fixture = await createFixture(t);
   const controller = await startController(t, fixture);
-  await controller.call('POST', '/contexts', { backend: 'chromium' });
+  await controller.call('POST', '/contexts', { backend: 'chrome' });
   const { pid } = (await controller.call('GET', '/status')).body.browsers[0];
 
   await controller.stop();

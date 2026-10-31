@@ -51,8 +51,8 @@ export async function eventually(check, milliseconds = 5000, what = 'condition')
 export async function createFixture(t, overrides = {}) {
   const dir = tempFixture('browser-swarm-');
   const output = path.join(dir, 'output');
-  const [controllerPort, chromiumPort, firefoxPort] = await freePorts(3);
-  const ports = { controller: controllerPort, chromium: chromiumPort, firefox: firefoxPort };
+  const [controllerPort, chromePort, firefoxPort, headedPort] = await freePorts(4);
+  const ports = { controller: controllerPort, chrome: chromePort, firefox: firefoxPort, chromeHeaded: headedPort };
   const constants = {
     IDLE_MS: 60_000,
     CALL_DEADLINE_MS: 5_000,
@@ -61,15 +61,16 @@ export async function createFixture(t, overrides = {}) {
     CONNECT_TIMEOUT_MS: 5_000,
     CONNECT_DEADLINE_MS: 5_000,
     TOTAL_DEADLINE_MS: 20_000,
+    RECHECK_MS: 50,
+    RETRY_PAUSE_MS: 50,
     ...overrides,
   };
 
   fs.mkdirSync(output, { recursive: true });
   fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'browser-swarm-fixture', version: '0.0.0', type: 'module' }));
-  fs.writeFileSync(path.join(dir, 'fingerprint-seed'), '12345678\n');
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
 
-  for (const name of ['config.ts', 'api.ts', 'controller.ts', 'cli.ts', 'mcp.ts']) {
+  for (const name of ['config.ts', 'api.ts', 'controller.ts', 'cli.ts', 'mcp.ts', 'chrome.ts', 'challenge.ts']) {
     let source = fs.readFileSync(path.join(repo, 'src', name), 'utf8');
     for (const [key, value] of Object.entries(constants)) {
       source = source.replace(new RegExp(`(const ${key} = )[\\d_]+`), `$1${value}`);
@@ -77,41 +78,45 @@ export async function createFixture(t, overrides = {}) {
     source = source
       .replace('export const PORT = 9387;', `export const PORT = ${ports.controller};`)
       .replace(/export const OUTPUT_ROOT = '[^']*';/, `export const OUTPUT_ROOT = ${JSON.stringify(output)};`)
-      .replace('port: firefox ? 9378 : 9377,', `port: firefox ? ${ports.firefox} : ${ports.chromium},`)
       .replace(
-        "endpoint: firefox ? 'ws://127.0.0.1:9378/browser-swarm' : 'http://127.0.0.1:9377',",
-        `endpoint: firefox ? 'ws://127.0.0.1:${ports.firefox}/browser-swarm' : 'http://127.0.0.1:${ports.chromium}',`,
+        "{ chrome: 9377, firefox: 9378, 'chrome-headed': 9379 }",
+        `{ chrome: ${ports.chrome}, firefox: ${ports.firefox}, 'chrome-headed': ${ports.chromeHeaded} }`,
       );
+    if (!overrides.realBrowser) {
+      source = source
+        .replace(/export const CHROME_BINARY = [^;]+;/, `export const CHROME_BINARY = ${JSON.stringify(path.join(dir, 'fake-chrome'))};`)
+        .replace("const XVFB = 'Xvfb';", `const XVFB = ${JSON.stringify(path.join(dir, 'fake-xvfb'))};`);
+    }
     fs.writeFileSync(path.join(dir, 'src', name), source);
   }
 
   fs.mkdirSync(path.join(dir, 'node_modules'), { recursive: true });
   fs.symlinkSync(path.join(repo, 'node_modules/@modelcontextprotocol'), path.join(dir, 'node_modules/@modelcontextprotocol'));
+  fs.symlinkSync(path.join(repo, 'node_modules/tldts'), path.join(dir, 'node_modules/tldts'));
   if (overrides.realBrowser) {
     // The real gate: real browsers, real Playwright MCP, but still a private
     // profile, a private output root and allocated ports.
     fs.symlinkSync(path.join(repo, 'node_modules/@playwright'), path.join(dir, 'node_modules/@playwright'));
     fs.symlinkSync(path.join(repo, 'node_modules/playwright-core'), path.join(dir, 'node_modules/playwright-core'));
     fs.symlinkSync(path.join(repo, 'node_modules/playwright'), path.join(dir, 'node_modules/playwright'));
-    fs.symlinkSync(path.join(repo, 'fingerprint-chromium'), path.join(dir, 'fingerprint-chromium'));
   } else {
     fs.mkdirSync(path.join(dir, 'node_modules/@playwright/mcp'), { recursive: true });
     fs.copyFileSync(path.join(repo, 'tests/fixtures/fake-mcp.js'), path.join(dir, 'node_modules/@playwright/mcp/cli.js'));
-    installFakeChromium(dir, overrides.browserStartupMs ?? 0);
+    installFakeChrome(dir, overrides.browserStartupMs ?? 0);
   }
 
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return { dir, output, ports, controller: path.join(dir, 'src/controller.ts'), cli: path.join(dir, 'src/cli.ts') };
 }
 
-export function installFakeChromium(dir, startupMs = 0) {
-  const binary = process.platform === 'darwin'
-    ? 'fingerprint-chromium/Chromium.app/Contents/MacOS/Chromium'
-    : 'fingerprint-chromium/chrome';
-  const target = path.join(dir, binary);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, `#!/bin/bash\nexport FAKE_BROWSER_STARTUP_MS=${startupMs}\nexec "${process.execPath}" "${repo}/tests/fixtures/fake-browser.js" "$@"\n`);
-  fs.chmodSync(target, 0o755);
+export function installFakeChrome(dir, startupMs = 0) {
+  const chrome = path.join(dir, 'fake-chrome');
+  fs.writeFileSync(chrome, `#!/bin/bash\nexport FAKE_BROWSER_STARTUP_MS=${startupMs}\nexec "${process.execPath}" "${repo}/tests/fixtures/fake-browser.js" "$@"\n`);
+  fs.chmodSync(chrome, 0o755);
+  // Reports a display on the -displayfd pipe, then waits to be killed.
+  const xvfb = path.join(dir, 'fake-xvfb');
+  fs.writeFileSync(xvfb, '#!/bin/bash\necho 99 >&3\nexec sleep 3600\n');
+  fs.chmodSync(xvfb, 0o755);
 }
 
 export function installFakeFirefox(dir) {

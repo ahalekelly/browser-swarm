@@ -64,7 +64,14 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
     if (name === 'browser_navigate') {
       url = args.url;
       state.cookies.push({ name: 'visited', value: url, domain: new URL(url).hostname, path: '/' });
-      return send(message.id, { content: [{ type: 'text', text: `navigated to ${url}` }] });
+      return send(message.id, { content: [{ type: 'text', text: `navigated to ${url}\n### Page\n- Page URL: ${url}\n- Page Title: Fake page` }] });
+    }
+    // The controller's challenge probe. Hosts named blocked.* challenge
+    // headless Chrome, which is the browser whose contexts get --user-agent.
+    if (name === 'browser_evaluate') {
+      const challenged = new URL(url).hostname.startsWith('blocked.') && argv.includes('--user-agent');
+      const page = { url, status: challenged ? 403 : 200, title: challenged ? 'Access Denied' : 'Fake page', body: 'x'.repeat(200), html: true };
+      return send(message.id, { content: [{ type: 'text', text: `### Result\n${JSON.stringify(page, null, 2)}\n### Ran Playwright code\n` }] });
     }
     if (name === 'browser_tabs') {
       return send(message.id, { content: [{ type: 'text', text: `### Open tabs\n- 0: (current) [Fake page] (${url})` }] });

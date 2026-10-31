@@ -28,7 +28,7 @@ test('a tool call prefixes the name, prints the text, and reports tool errors', 
 
   const called = swarm(fixture, [id, 'navigate', '{"url":"https://example.com/x"}']);
   assert.equal(called.status, 0, called.stderr);
-  assert.equal(called.stdout.trim(), 'navigated to https://example.com/x');
+  assert.equal(called.stdout.trim(), 'navigated to https://example.com/x\n### Page\n- Page URL: https://example.com/x\n- Page Title: Fake page');
 
   const prefixed = swarm(fixture, [id, 'browser_tabs', '{"action":"list"}']);
   assert.match(prefixed.stdout, /https:\/\/example\.com\/x/);
@@ -50,7 +50,7 @@ test('tool arguments can come from stdin', async (t) => {
 
   const piped = swarm(fixture, [id, 'navigate', '-'], { input: '{"url":"https://example.com/piped"}' });
   assert.equal(piped.status, 0, piped.stderr);
-  assert.equal(piped.stdout.trim(), 'navigated to https://example.com/piped');
+  assert.equal(piped.stdout.trim(), 'navigated to https://example.com/piped\n### Page\n- Page URL: https://example.com/piped\n- Page Title: Fake page');
 
   const broken = swarm(fixture, [id, 'navigate', '-'], { input: 'not json' });
   assert.equal(broken.status, 2);
@@ -96,17 +96,17 @@ test('open --session names the session, ls shows it, and close saves it', async 
   assert.equal(opened.status, 0, opened.stderr);
   const id = opened.stdout.trim();
   assert.match(opened.stderr, /^session: shop \(new, starts logged out\)$/m);
-  assert.match(swarm(fixture, ['ls']).stdout, new RegExp(`${id} {2}chromium {2}session shop`));
+  assert.match(swarm(fixture, ['ls']).stdout, new RegExp(`${id} {2}chrome {2}session shop`));
   assert.match(swarm(fixture, [id, 'close']).stderr, new RegExp(`closed ${id}, saved session shop`));
 
   const reopened = swarm(fixture, ['open', 'firefox', '--session', 'shop']);
   assert.equal(reopened.status, 3, 'firefox without a fake Firefox should fail in the controller, not in parsing');
-  const again = swarm(fixture, ['open', '--session', 'shop', 'chromium']);
+  const again = swarm(fixture, ['open', '--session', 'shop', 'chrome']);
   assert.match(again.stderr, /^session: shop$/m);
 
   assert.equal(swarm(fixture, ['open', '--session']).status, 2);
   assert.equal(swarm(fixture, ['open', '--session', 'Bad/Name']).status, 2);
-  assert.equal(swarm(fixture, ['open', 'chromium', 'extra']).status, 2);
+  assert.equal(swarm(fixture, ['open', 'chrome', 'extra']).status, 2);
 });
 
 test('login opens the page, waits for Enter, and saves the session', async (t) => {
@@ -147,12 +147,12 @@ test('ls and status describe the swarm', async (t) => {
   const id = swarm(fixture, ['open']).stdout.trim();
   swarm(fixture, [id, 'navigate', '{"url":"https://example.com/listed"}']);
   const listed = swarm(fixture, ['ls']);
-  assert.match(listed.stdout, new RegExp(`${id} {2}chromium`));
+  assert.match(listed.stdout, new RegExp(`${id} {2}chrome`));
   assert.match(listed.stdout, /https:\/\/example\.com\/listed/);
 
   const status = swarm(fixture, ['status']);
   assert.match(status.stdout, /controller on 127\.0\.0\.1:\d+, 1 context/);
-  assert.match(status.stdout, /chromium: pid \d+, up \d+s, 1 context/);
+  assert.match(status.stdout, /chrome: pid \d+, up \d+s, 1 context/);
 });
 
 test('usage mistakes exit 2 and unknown contexts exit 4', async (t) => {

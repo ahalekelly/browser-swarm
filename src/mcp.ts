@@ -15,7 +15,7 @@ const CLOSE_TOOL = {
   inputSchema: { type: 'object', properties: {} },
 };
 
-export async function serveMcp(backend: 'chromium' | 'firefox'): Promise<void> {
+export async function serveMcp(backend: 'chrome' | 'firefox'): Promise<void> {
   const version = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
 
   let id: string;

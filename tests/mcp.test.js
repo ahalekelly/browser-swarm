@@ -22,7 +22,7 @@ test('the adapter serves one context and closes it on browser_close', async (t) 
   assert.deepEqual(names, ['browser_navigate', 'browser_tabs', 'browser_take_screenshot', 'browser_close']);
 
   const navigated = await call(session, 3, 'tools/call', { name: 'browser_navigate', arguments: { url: 'https://example.com/mcp' } });
-  assert.deepEqual(navigated.result.content, [{ type: 'text', text: 'navigated to https://example.com/mcp' }]);
+  assert.deepEqual(navigated.result.content, [{ type: 'text', text: 'navigated to https://example.com/mcp\n### Page\n- Page URL: https://example.com/mcp\n- Page Title: Fake page' }]);
   assert.equal((await controller.call('GET', '/contexts')).body.contexts.length, 1);
 
   const closed = await call(session, 4, 'tools/call', { name: 'browser_close', arguments: {} });
@@ -113,7 +113,7 @@ test('a session that cannot get a context still explains itself over MCP', async
 });
 
 function adapter(t, fixture) {
-  const session = spawnJsonRpc(process.execPath, [fixture.cli, 'mcp', 'chromium'], {
+  const session = spawnJsonRpc(process.execPath, [fixture.cli, 'mcp', 'chrome'], {
     env: { ...process.env, ...NO_SANDBOX_PROXY },
   });
   t.after(() => session.child.kill('SIGKILL'));

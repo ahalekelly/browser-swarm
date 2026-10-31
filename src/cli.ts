@@ -10,13 +10,14 @@ const PREVIEW_LINES = 100;
 const LOGIN_RENEW_MS = 60_000;
 
 const USAGE = `usage:
-  swarm open [chromium|firefox] [--session <name>]
+  swarm open [chrome|firefox] [--session <name>]
                                   open a context, optionally with a saved
                                   session; prints its id
   swarm login <session> <url>     open <url> in a session context for a human
                                   to log in; Enter saves the session
   swarm ls                        list open contexts
-  swarm status                    browsers, contexts, last crash
+  swarm status                    browsers, contexts, last crash, sites
+                                  learned to need headed Chrome
   swarm <id> tools                available tools
   swarm <id> help <tool>          one tool's schema
   swarm <id> <tool> [json|-]      call a tool ("-" reads JSON arguments from stdin)
@@ -61,7 +62,7 @@ async function run(args: string[]): Promise<void> {
 async function command(verb: string, args: string[]): Promise<void> {
   if (verb === 'mcp') {
     const backend = args[0];
-    if (backend !== 'chromium' && backend !== 'firefox') throw new UsageError('mcp takes chromium or firefox');
+    if (backend !== 'chrome' && backend !== 'firefox') throw new UsageError('mcp takes chrome or firefox');
     return await serveMcp(backend);
   }
   if (verb === 'open') {
@@ -69,8 +70,8 @@ async function command(verb: string, args: string[]): Promise<void> {
     const flag = rest.indexOf('--session');
     const session = flag === -1 ? undefined : rest.splice(flag, 2)[1];
     if (flag !== -1 && session === undefined) throw new UsageError('--session takes a name');
-    const [backend = 'chromium', ...extra] = rest;
-    if (backend !== 'chromium' && backend !== 'firefox') throw new UsageError(`unknown backend ${backend}`);
+    const [backend = 'chrome', ...extra] = rest;
+    if (backend !== 'chrome' && backend !== 'firefox') throw new UsageError(`unknown backend ${backend}`);
     if (extra.length > 0) throw new UsageError(`unexpected ${extra.join(' ')}`);
     const result = await api('POST', '/contexts', { backend, session }) as Opened;
     console.log(result.id);
@@ -88,13 +89,13 @@ async function command(verb: string, args: string[]): Promise<void> {
     for (const context of contexts) {
       const state = context.busy ? 'busy' : `idle ${context.idleSeconds}s`;
       const session = context.session ? `  session ${context.session}` : '';
-      console.log(`${context.id}  ${context.backend}${session}  age ${context.ageSeconds}s  ${state}  ${context.outputDir}`);
+      console.log(`${context.id}  ${context.browser}${session}  age ${context.ageSeconds}s  ${state}  ${context.outputDir}`);
       for (const page of context.pages ?? []) console.log(`    ${page}`);
     }
     return;
   }
   if (verb === 'status') {
-    const status = await api('GET', '/status') as { port: number; contexts: number; browsers: BrowserInfo[] };
+    const status = await api('GET', '/status') as { port: number; contexts: number; browsers: BrowserInfo[]; headedSites: { domain: string; until: string }[] };
     console.log(`controller on 127.0.0.1:${status.port}, ${status.contexts} context${status.contexts === 1 ? '' : 's'}`);
     if (status.browsers.length === 0) console.log('no browser started yet');
     for (const browser of status.browsers) {
@@ -103,6 +104,7 @@ async function command(verb: string, args: string[]): Promise<void> {
         : `${browser.backend}: stopped`);
       if (browser.lastCrash) console.log(`  last crash: ${browser.lastCrash}`);
     }
+    for (const site of status.headedSites) console.log(`headed Chrome for ${site.domain} until ${site.until.slice(0, 10)}`);
     return;
   }
   throw new UsageError(`unknown command ${verb}`);
@@ -118,12 +120,15 @@ async function login(session: string, url: string): Promise<void> {
   const { contexts } = await api('GET', '/contexts') as { contexts: ContextInfo[] };
   const open = contexts.filter((context) => context.session === session).map((context) => context.id);
   if (open.length > 0) return fail(1, `session ${session} is open in ${open.join(', ')}; close those contexts first`);
-  const { id } = await api('POST', '/contexts', { backend: 'chromium', session }) as Opened;
+  const { id } = await api('POST', '/contexts', { backend: 'chrome', session }) as Opened;
   const navigated = await api('POST', `/contexts/${id}/call`, { name: 'browser_navigate', arguments: { url } }) as CallResult;
   if (navigated.isError) {
     return fail(1, `could not open ${url}: ${navigated.text}\nSession ${session} is unchanged; context ${id} expires unsaved.`);
   }
-  console.error(`Context ${id} is on ${url}. Open it in chrome://inspect (see the BrowserSwarm README), log in, then press Enter here to save session ${session}.`);
+  // The site may have moved the context to headed Chrome, on its own port.
+  const { contexts: listed } = await api('GET', '/contexts') as { contexts: ContextInfo[] };
+  const port = listed.find((context) => context.id === id)!.port;
+  console.error(`Context ${id} is on ${url}. Open it in chrome://inspect at localhost:${port} (see the BrowserSwarm README), log in, then press Enter here to save session ${session}.`);
   // A renewal still in flight when Enter starts the close fails harmlessly.
   let closing = false;
   const renew = setInterval(() => {
@@ -192,7 +197,7 @@ async function callTool(id: string, name: string, args: string[]): Promise<void>
 }
 
 type Opened = { id: string; outputDir: string; session?: { name: string; existing: boolean } };
-type ContextInfo = { id: string; backend: string; session: string | null; ageSeconds: number; idleSeconds: number; busy: boolean; outputDir: string; pages: string[] | null };
+type ContextInfo = { id: string; browser: string; port: number; session: string | null; ageSeconds: number; idleSeconds: number; busy: boolean; outputDir: string; pages: string[] | null };
 type BrowserInfo = { backend: string; running: boolean; pid: number | null; upSeconds: number | null; contexts: number; lastCrash: string | null };
 type Tool = { name: string; description?: string; inputSchema: unknown };
 type CallResult = { text: string; isError: boolean; outputDir: string; savedPath?: string };

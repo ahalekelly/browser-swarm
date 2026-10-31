@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Stand-in for fingerprint-chromium in controller tests: answers CDP's
+// Stand-in for Google Chrome in controller tests: answers CDP's
 // /json/version on the given port and keeps running until killed.
 // /json/connections reports how many other sockets are attached, which is how
 // tests see contexts appear and disappear from the browser's side.
@@ -19,7 +19,9 @@ const server = http.createServer((request, response) => {
   response.setHeader('content-type', 'application/json');
   if (request.url === '/json/version') {
     response.end(JSON.stringify({
-      Browser: 'FakeChromium/1',
+      Browser: 'FakeChrome/1',
+      'User-Agent': `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ${process.argv.includes('--headless') ? 'HeadlessChrome' : 'Chrome'}/156.0.0.0 Safari/537.36`,
+      display: process.env.DISPLAY ?? null,
       webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/test`,
     }));
     return;

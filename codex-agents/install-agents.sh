@@ -17,7 +17,7 @@ trap 'rm -f "$PROMPT"' EXIT
 # by the contents of <insert>.
 splice() { awk -v marker="$1" -v insert="$3" '$0 == marker { while ((getline line < insert) > 0) print line; close(insert); next } 1' "$2"; }
 
-"$CODEX" mcp add playwright -- "$NODE" "$DIR/src/cli.ts" mcp chromium
+"$CODEX" mcp add playwright -- "$NODE" "$DIR/src/cli.ts" mcp chrome
 mkdir -p "$AGENTS"
 splice __TOOLING__ "$DIR/agent-prompt.md" "$DIR/codex-agents/tooling.md" > "$PROMPT"
 splice __PROMPT__ "$TEMPLATE" "$PROMPT" | sed -e "s|__DIR__|$DIR|g" > "$AGENTS/browser-swarm.toml"
