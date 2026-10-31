@@ -4,8 +4,8 @@
 # that package's browser revision and verifies the installed executable.
 set -euo pipefail
 
-PLAYWRIGHT_VERSION=1.63.0-alpha-2026-08-05
-FIREFOX_REVISION=1539
+PLAYWRIGHT_VERSION=1.64.1
+FIREFOX_REVISION=1555
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 "$DIR/node_modules/.bin/playwright" --version | grep -qF "$PLAYWRIGHT_VERSION" || {
