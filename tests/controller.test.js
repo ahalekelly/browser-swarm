@@ -63,7 +63,7 @@ test('simultaneous opens share one browser and stay isolated', async (t) => {
   const ids = opened.map((response) => response.body.id);
   assert.equal(new Set(ids).size, 4, 'ids collided');
   assert.equal(await browserConnections(fixture.ports.chrome), 4);
-  assert.equal(controller.log().match(/starting shared Chromium browser/g).length, 1, 'more than one browser was launched');
+  assert.equal(controller.log().match(/starting headless Chrome/g).length, 1, 'more than one browser was launched');
 
   await Promise.all(ids.map((id, index) => controller.call('POST', `/contexts/${id}/call`, {
     name: 'browser_navigate',
@@ -199,7 +199,7 @@ test('a slow cold start is waited out rather than restarted', async (t) => {
 
   const opened = await controller.call('POST', '/contexts', { backend: 'chrome' });
   assert.equal(opened.status, 200, JSON.stringify(opened.body));
-  assert.equal(controller.log().match(/starting shared Chromium browser/g).length, 1);
+  assert.equal(controller.log().match(/starting headless Chrome/g).length, 1);
 });
 
 test('a context whose MCP fails to initialize is not registered', async (t) => {
@@ -276,7 +276,7 @@ test('each context gets its own output dir as its workspace root', async (t) => 
   assert.equal(launches.length, 2);
   for (const launch of launches) {
     assert.deepEqual(launch.argv.slice(0, 3), ['--cdp-endpoint', `http://127.0.0.1:${fixture.ports.chrome}`, '--isolated']);
-    assert.deepEqual(launch.argv.slice(5), ['--image-responses', 'omit']);
+    assert.deepEqual(launch.argv.slice(5, 7), ['--image-responses', 'omit']);
     assert.equal(launch.cwd, launch.argv[4], 'the child did not run inside its output dir');
   }
   assert.notEqual(launches[0].cwd, launches[1].cwd);
@@ -396,6 +396,55 @@ test('the Firefox backend runs its own browser and contexts', async (t) => {
   const status = (await controller.call('GET', '/status')).body;
   assert.deepEqual(status.browsers.map((browser) => [browser.backend, browser.running, browser.contexts]), [['firefox', true, 1]]);
   assert.equal((await controller.call('DELETE', `/contexts/${opened.body.id}`)).body.session, 'shop');
+});
+
+// Hosts named blocked.* challenge the fake headless Chrome and render on the
+// fake headed one; see tests/fixtures/fake-mcp.js.
+const linuxOnly = { skip: process.platform !== 'linux' && 'headed Chrome runs only on Linux' };
+
+test('a site that blocks headless Chrome moves the context to headed Chrome, keeping its cookies', linuxOnly, async (t) => {
+  const fixture = await createFixture(t);
+  const controller = await startController(t, fixture);
+  const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome', session: 'shop' })).body;
+  const navigate = (url) => controller.call('POST', `/contexts/${id}/call`, { name: 'browser_navigate', arguments: { url } });
+
+  await navigate('https://example.com/x');
+  const blocked = await navigate('https://www.blocked.example/a');
+  assert.equal(blocked.body.isError, false);
+  assert.equal(blocked.body.text, 'navigated to https://www.blocked.example/a\n### Page\n- Page URL: https://www.blocked.example/a\n- Page Title: Fake page');
+
+  const [listed] = (await controller.call('GET', '/contexts')).body.contexts;
+  assert.deepEqual([listed.browser, listed.port], ['chrome-headed', fixture.ports.chromeHeaded]);
+  const headed = await fetch(`http://127.0.0.1:${fixture.ports.chromeHeaded}/json/version`).then((response) => response.json());
+  assert.equal(headed.display, ':99');
+  assert.deepEqual((await controller.call('GET', '/status')).body.headedSites.map((site) => site.domain), ['blocked.example']);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(fixture.dir, 'headed-sites.json'), 'utf8'))), ['blocked.example']);
+  assert.deepEqual(fs.readdirSync(path.join(fixture.output, id)).filter((name) => name.startsWith('.move')), [], 'the moved state was left behind');
+
+  await controller.call('DELETE', `/contexts/${id}`);
+  const saved = JSON.parse(fs.readFileSync(path.join(fixture.dir, 'sessions/shop.json'), 'utf8'));
+  // The headless visit's datadome cookie stayed behind.
+  assert.deepEqual(saved.cookies.map((cookie) => cookie.name), ['visited', 'visited', 'visited']);
+});
+
+test('learned sites load at startup, open straight in headed Chrome, and expire', linuxOnly, async (t) => {
+  const fixture = await createFixture(t);
+  fs.writeFileSync(path.join(fixture.dir, 'headed-sites.json'), JSON.stringify({
+    'blocked.example': new Date(Date.now() + 86_400_000).toISOString(),
+    'stale.example': new Date(Date.now() - 1000).toISOString(),
+  }));
+  const controller = await startController(t, fixture);
+  assert.deepEqual((await controller.call('GET', '/status')).body.headedSites.map((site) => site.domain), ['blocked.example']);
+
+  const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body;
+  await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_navigate', arguments: { url: 'https://shop.blocked.example/' } });
+  assert.match(controller.log(), new RegExp(`moved ${id} to chrome-headed`));
+  assert.doesNotMatch(controller.log(), /challenged headless Chrome/);
+
+  const plain = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body.id;
+  await controller.call('POST', `/contexts/${plain}/call`, { name: 'browser_navigate', arguments: { url: 'https://stale.example/' } });
+  const browsers = Object.fromEntries((await controller.call('GET', '/contexts')).body.contexts.map((context) => [context.id, context.browser]));
+  assert.deepEqual(browsers, { [id]: 'chrome-headed', [plain]: 'chrome' });
 });
 
 test('the API refuses anything but an authorized, well-formed request', async (t) => {

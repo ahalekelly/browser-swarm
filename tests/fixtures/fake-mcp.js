@@ -64,13 +64,12 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
     if (name === 'browser_navigate') {
       url = args.url;
       state.cookies.push({ name: 'visited', value: url, domain: new URL(url).hostname, path: '/' });
+      if (challenged()) state.cookies.push({ name: 'datadome', value: 'flagged', domain: new URL(url).hostname, path: '/' });
       return send(message.id, { content: [{ type: 'text', text: `navigated to ${url}\n### Page\n- Page URL: ${url}\n- Page Title: Fake page` }] });
     }
-    // The controller's challenge probe. Hosts named blocked.* challenge
-    // headless Chrome, which is the browser whose contexts get --user-agent.
+    // The controller's challenge probe.
     if (name === 'browser_evaluate') {
-      const challenged = new URL(url).hostname.startsWith('blocked.') && argv.includes('--user-agent');
-      const page = { url, status: challenged ? 403 : 200, title: challenged ? 'Access Denied' : 'Fake page', body: 'x'.repeat(200), html: true };
+      const page = { url, status: challenged() ? 403 : 200, title: challenged() ? 'Access Denied' : 'Fake page', body: 'x'.repeat(200), html: true };
       return send(message.id, { content: [{ type: 'text', text: `### Result\n${JSON.stringify(page, null, 2)}\n### Ran Playwright code\n` }] });
     }
     if (name === 'browser_tabs') {
@@ -102,6 +101,12 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
 
   return send(message.id, {});
 });
+
+// Hosts under blocked.* challenge headless Chrome, which is the browser whose
+// contexts get --user-agent, and set a bot-detection cookie.
+function challenged() {
+  return /(^|\.)blocked\./.test(new URL(url).hostname) && argv.includes('--user-agent');
+}
 
 function send(id, result) {
   process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`);

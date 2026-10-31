@@ -8,7 +8,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync
 import { createServer, get, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import { getDomain } from 'tldts';
-import { challengeMarkers, type PageState } from './challenge.ts';
+import { BOT_COOKIE, challengeMarkers, type PageState } from './challenge.ts';
 import { CHROME_BINARY, chromeArgs, disableSafeBrowsing, HEADED_SCREEN, headlessUserAgent, VIEWPORT } from './chrome.ts';
 import { CALL_DEADLINE_MS, IDLE_MS, OUTPUT_ROOT, PORT, ROOT, SESSION_ROOT, TOKEN_FILE } from './config.ts';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -192,15 +192,11 @@ async function launchChrome(state: BrowserState, headed: boolean): Promise<void>
     });
   }
 
-  const exited = new Promise<void>((resolveExit) => child.once('close', () => resolveExit()));
-  let down = false;
-  void exited.then(async () => {
-    down = true;
-    await display?.stop();
-    onBrowserExit(state);
-  });
-  // Chrome cannot outlive its display.
+  // Chrome and its display stop together, whichever goes first.
+  const exited = new Promise<void>((resolveExit) => child.once('close', () => resolveExit())).then(() => display?.stop());
   display?.onExit(() => child.kill());
+  let down = false;
+  void exited.then(() => { down = true; onBrowserExit(state); });
 
   state.pid = child.pid;
   state.stop = async () => {
@@ -227,10 +223,11 @@ async function launchChrome(state: BrowserState, headed: boolean): Promise<void>
   throw new Error(`${backend.displayName} did not answer on port ${backend.port} within ${BOOT_TIMEOUT_MS / 1000}s. Its last output:\n${tail.trimEnd() || '(none)'}`);
 }
 
-// Xvfb picks a free display itself and reports it on the -displayfd pipe.
+// Xvfb picks a free display itself and reports it on the -displayfd pipe;
+// -terminate makes it exit once Chrome, its only client, disconnects.
 async function startXvfb(): Promise<{ name: string; stop: () => Promise<void>; onExit: (listener: () => void) => void }> {
   const [command, ...priorityArgs] = PLATFORM.lowPriority;
-  const child = spawn(command, [...priorityArgs, XVFB, '-displayfd', '3', '-screen', '0', `${HEADED_SCREEN.width}x${HEADED_SCREEN.height}x24`, '-nolisten', 'tcp'], {
+  const child = spawn(command, [...priorityArgs, XVFB, '-displayfd', '3', '-screen', '0', `${HEADED_SCREEN.width}x${HEADED_SCREEN.height}x24`, '-nolisten', 'tcp', '-terminate'], {
     stdio: ['ignore', 'ignore', 'pipe', 'pipe'],
   });
   let output = '';
@@ -391,13 +388,17 @@ async function startChild(context: Context, storageState: string | undefined): P
   return client;
 }
 
-// Moves a context to another browser, carrying its cookies and storage. Its
-// tabs close; a move happens only at a navigation, which replaces the page
-// and its element refs anyway.
+// Moves a context to another browser, carrying its cookies and storage
+// except bot-detection cookies, which would tie the new browser to the old
+// one's verdict. Its tabs close; a move happens only at a navigation, which
+// replaces the page and its element refs anyway.
 async function moveContext(context: Context, target: BrowserName): Promise<void> {
   await ensureBrowser(target);
   const exported = join(context.outputDir, `.move-${Date.now().toString(36)}.json`);
   await exportState(context, exported);
+  const state = JSON.parse(readFileSync(exported, 'utf8'));
+  state.cookies = state.cookies.filter((cookie: { name: string }) => !BOT_COOKIE.test(cookie.name));
+  writeFileSync(exported, JSON.stringify(state));
   const previous = context.browser;
   context.client.onclose = undefined;
   void context.client.close().catch(() => {});

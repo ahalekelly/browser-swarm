@@ -8,6 +8,10 @@ const CHALLENGE_TITLE = /^just a moment|access denied|error page|attention requi
 const CHALLENGE_PATH_SEGMENT = /captcha|challenge/i;
 const CHALLENGE_HOST = /(^|\.)(perfdrive\.com|queue-it\.net|captcha-delivery\.com)$/i;
 
+// Bot-detection vendors' session cookies, each bound to the browser that
+// earned it.
+export const BOT_COOKIE = /^(?:_abck|bm_sz|ak_bmsc|bm_sv|bm_lso|datadome|__cf_bm|cf_clearance|_px.*|pxcts|aws-waf-token|incap_ses.*|visid_incap.*|reese84|___utmvc|KP_UIDz(?:-ssn)?)$/;
+
 export type PageState = {
   url: string;
   status: number | null;

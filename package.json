@@ -14,7 +14,7 @@
   },
   "scripts": {
     "test": "node --test --test-timeout=60000 tests/*.test.js",
-    "test:chromium": "node --test --test-timeout=180000 tests/chromium/*.test.js",
+    "test:chrome": "node --test --test-timeout=180000 tests/chrome/*.test.js",
     "test:firefox": "node --test --test-timeout=180000 tests/firefox/*.test.js"
   },
   "dependencies": {

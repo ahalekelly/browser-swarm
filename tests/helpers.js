@@ -172,7 +172,7 @@ export async function startController(t, fixture, env = {}) {
   // hold a port that the next fixture could be handed.
   t.after(async () => {
     child.kill('SIGTERM');
-    await Promise.race([closed, delay(3000)]);
+    await Promise.race([closed, delay(10_000)]);
     child.kill('SIGKILL');
   });
 

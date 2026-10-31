@@ -103,6 +103,40 @@ export function realBrowserTests(backend) {
     await eventually(async () => (await controller.call('GET', '/contexts')).body.contexts.length === 0, 30_000, 'context expiry');
     await eventually(async () => !(await controller.call('GET', '/status')).body.browsers[0].running, 30_000, 'browser stop');
   });
+  if (backend === 'chrome') {
+    test('headless Chrome presents a Chrome user agent', async (t) => {
+      const fixture = await createFixture(t, { realBrowser: true, IDLE_MS: 600_000 });
+      const controller = await startController(t, fixture);
+      const site = await testSite(t);
+      const entry = await context(controller, backend);
+      await entry.call('browser_navigate', { url: `${site}/first` });
+      const agent = await entry.call('browser_evaluate', { function: '() => navigator.userAgent + " " + navigator.userAgentData.brands.map((b) => b.brand).join(",")' });
+      assert.doesNotMatch(agent, /Headless/);
+      assert.match(agent, /Chrome\/\d+.*Google Chrome/);
+    });
+  }
+
+  if (backend === 'chrome' && process.platform === 'linux') {
+    test('a site that blocks headless Chrome reopens in headed Chrome with the context\'s cookies', async (t) => {
+      const fixture = await createFixture(t, { realBrowser: true, IDLE_MS: 600_000 });
+      const controller = await startController(t, fixture);
+      const site = await testSite(t);
+      // Chrome resolves every *.localhost name to loopback, and each is its
+      // own registrable domain.
+      const port = new URL(site).port;
+      const entry = await context(controller, backend);
+      await entry.call('browser_navigate', { url: `http://shop.localhost:${port}/first` });
+
+      const gated = await entry.call('browser_navigate', { url: `http://gate.localhost:${port}/gate` });
+      assert.match(gated, /Page Title: gate/);
+      const [listed] = (await controller.call('GET', '/contexts')).body.contexts;
+      assert.equal(listed.browser, 'chrome-headed');
+      assert.deepEqual((await controller.call('GET', '/status')).body.headedSites.map((entry) => entry.domain), ['gate.localhost']);
+
+      await entry.call('browser_navigate', { url: `http://shop.localhost:${port}/echo` });
+      assert.match(await entry.call('browser_evaluate', { function: '() => document.body.textContent' }), /visited=first/);
+    });
+  }
 }
 
 async function context(controller, backend, session) {
@@ -122,8 +156,16 @@ async function context(controller, backend, session) {
 }
 
 async function testSite(t) {
+  let gateVisits = 0;
   const server = http.createServer((request, response) => {
     const name = request.url.slice(1);
+    // /gate blocks its first visitor, as a bot-detection system blocks headless Chrome.
+    if (name === 'gate' && gateVisits++ === 0) {
+      response.statusCode = 403;
+      response.setHeader('content-type', 'text/html');
+      response.end('<title>Access Denied</title><h1>Access Denied</h1>');
+      return;
+    }
     if (name === 'favicon.ico') {
       response.statusCode = 404;
       response.end();
