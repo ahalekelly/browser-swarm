@@ -114,11 +114,20 @@ test('login opens the page, waits for Enter, and saves the session', async (t) =
   await startController(t, fixture);
 
   // login insists on a terminal, so `script` gives it one; its output arrives
-  // on stdout with the terminal's line endings.
+  // on stdout with the terminal's line endings. Enter comes from a file: BSD
+  // script exits on the socket spawnSync would use for stdin.
+  const enter = path.join(fixture.dir, 'enter');
+  fs.writeFileSync(enter, '\n');
   const command = [process.execPath, fixture.cli, 'login', 'shop', 'https://example.com/login'];
-  const runLogin = () => process.platform === 'darwin'
-    ? run('script', ['-q', '/dev/null', ...command], { input: '\n', env: { ...process.env, ...NO_SANDBOX_PROXY } })
-    : run('script', ['-qec', command.join(' '), '/dev/null'], { input: '\n', env: { ...process.env, ...NO_SANDBOX_PROXY } });
+  const scriptArgs = process.platform === 'darwin' ? ['-q', '/dev/null', ...command] : ['-qec', command.join(' '), '/dev/null'];
+  const runLogin = () => {
+    const stdin = fs.openSync(enter, 'r');
+    try {
+      return run('script', scriptArgs, { stdio: [stdin, 'pipe', 'pipe'], env: { ...process.env, ...NO_SANDBOX_PROXY } });
+    } finally {
+      fs.closeSync(stdin);
+    }
+  };
 
   // An open context of the session would later overwrite the new login.
   const agent = swarm(fixture, ['open', '--session', 'shop']).stdout.trim();
