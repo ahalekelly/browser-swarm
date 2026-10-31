@@ -113,23 +113,14 @@ test('login opens the page, waits for Enter, and saves the session', async (t) =
   const fixture = await createFixture(t);
   await startController(t, fixture);
 
-  // login insists on a terminal, so `script` gives it one; its output arrives
-  // on stdout with the terminal's line endings. Enter comes through a fifo
-  // that stays open for the whole run: BSD script dies on the socket spawnSync
-  // would use for stdin, and at EOF it sends ^D ahead of unforwarded input.
-  const enter = path.join(fixture.dir, 'enter');
-  run('mkfifo', [enter]);
-  const command = [process.execPath, fixture.cli, 'login', 'shop', 'https://example.com/login'];
-  const scriptArgs = process.platform === 'darwin' ? ['-q', '/dev/null', ...command] : ['-qec', command.join(' '), '/dev/null'];
-  const runLogin = () => {
-    const fifo = fs.openSync(enter, 'r+');
-    fs.writeSync(fifo, '\n');
-    try {
-      return run('script', scriptArgs, { stdio: [fifo, 'pipe', 'pipe'], env: { ...process.env, ...NO_SANDBOX_PROXY } });
-    } finally {
-      fs.closeSync(fifo);
-    }
-  };
+  // login insists on a terminal, so a pty tool gives it one and presses Enter;
+  // its output arrives on stdout with the terminal's line endings. BSD script
+  // sends ^D ahead of piped input, so macOS uses expect, which answers the prompt.
+  const command = [process.execPath, fixture.cli, 'login', 'shop', 'https://example.com/login'].join(' ');
+  const env = { ...process.env, ...NO_SANDBOX_PROXY };
+  const runLogin = () => process.platform === 'darwin'
+    ? run('expect', ['-c', `spawn -noecho ${command}; expect { "press Enter" { send "\\r"; expect eof } eof }; exit [lindex [wait] 3]`], { env })
+    : run('script', ['-qec', command, '/dev/null'], { input: '\n', env });
 
   // An open context of the session would later overwrite the new login.
   const agent = swarm(fixture, ['open', '--session', 'shop']).stdout.trim();
