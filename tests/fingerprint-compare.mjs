@@ -34,6 +34,7 @@ const TARGETS = {
   'datadome-leboncoin': 'https://www.leboncoin.fr/',
   'datadome-stacked-hermes': 'https://www.hermes.com/us/en/',
   'perimeterx-therealreal': 'https://www.therealreal.com/',
+  cnn: 'https://www.cnn.com/',
 };
 const DETECTION_BODY_MARKERS = {
   akamai: /bazadebezolkohpepadr|\/akam\//i,
@@ -199,6 +200,7 @@ async function measure(session, { runId, config, configIndex, trial, target, set
     const body = await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '');
     const bodySnippet = body.slice(0, 500);
     const title = await page.title().catch(() => '');
+    const contentType = await page.evaluate(() => document.contentType).catch(() => 'text/html');
     const cookies = await context.cookies();
     const status = settledResponse?.status() ?? null;
     const requestHeaders = settledResponse ? await settledResponse.request().allHeaders() : {};
@@ -209,6 +211,7 @@ async function measure(session, { runId, config, configIndex, trial, target, set
       finalUrl: page.url(),
       title,
       body: bodySnippet,
+      contentType,
       navigationError,
       crashed,
     });
@@ -227,6 +230,8 @@ async function measure(session, { runId, config, configIndex, trial, target, set
       rendered: challenge.length === 0,
       challenge,
       bodySnippet,
+      bodyLength: body.length,
+      contentType,
       detectors: detectSystems(body, cookies),
       navigationError: navigationError ?? null,
       crashed,
@@ -396,6 +401,7 @@ function scoreStoredRecord(record) {
     finalUrl: record.finalUrl,
     title: record.title,
     body: record.bodySnippet ?? '',
+    contentType: record.contentType ?? 'text/html',
     navigationError: record.navigationError,
     crashed: record.crashed,
   });
@@ -409,8 +415,8 @@ function scoreStoredRecord(record) {
 
 // The controller's classifier, plus markers only a fixed target list makes
 // meaningful: any change of host, and server errors.
-function classifyChallenge({ status, targetUrl, finalUrl, title, body, navigationError, crashed }) {
-  const markers = challengeMarkers({ url: finalUrl, status, title, body, html: true }, targetUrl);
+function classifyChallenge({ status, targetUrl, finalUrl, title, body, contentType, navigationError, crashed }) {
+  const markers = challengeMarkers({ url: finalUrl, status, title, body, contentType, markup: '' }, targetUrl);
   if (crashed) markers.push('page-crash');
   if (navigationError) markers.push('navigation-error');
   if (status !== null && status >= 500) markers.push(`status-${status}`);

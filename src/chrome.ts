@@ -28,7 +28,8 @@ const DISABLED_FEATURES = [
 export function chromeArgs(headed: boolean, port: number, profile: string): string[] {
   const linux = process.platform === 'linux';
   return [
-    headed ? `--window-size=${HEADED_SCREEN.width},${HEADED_SCREEN.height}` : '--headless',
+    // Headed Chrome draws on Xvfb, never on a Wayland desktop it might find.
+    ...(headed ? [`--window-size=${HEADED_SCREEN.width},${HEADED_SCREEN.height}`, '--ozone-platform=x11'] : ['--headless']),
     // Headless Chrome still plays page audio through the speakers.
     '--mute-audio',
     `--remote-debugging-port=${port}`,

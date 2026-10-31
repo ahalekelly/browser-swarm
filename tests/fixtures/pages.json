@@ -1,0 +1,62 @@
+{
+ "blocked": {
+  "amazon-continue-shopping": {
+   "url": "https://www.amazon.com/dp/B0D1XD1ZV3",
+   "status": 200,
+   "title": "Amazon.com",
+   "body": "Click the button below to continue shopping\nContinue shopping\nConditions of Use     Privacy Policy\n© 1996-2025, Amazon.com, Inc. or its affiliates",
+   "contentType": "text/html",
+   "markup": ""
+  },
+  "cnn-unknown-error": {
+   "url": "https://www.cnn.com/",
+   "status": 200,
+   "title": "",
+   "body": "Unknown Error",
+   "contentType": "text/plain",
+   "markup": ""
+  }
+ },
+ "real": {
+  "example": {
+   "url": "https://example.com/",
+   "status": 200,
+   "title": "Example Domain",
+   "body": "This domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.\n\nهذا النطاق مُخصص للاستخدام في أمثلة التوثيق دون الحاجة إلى إذن. هذه ليست خدمة، يُرجى تجنب الاعتماد عليها لأغراض الاختبار والمراقبة.\n\n该域名仅用于文档示例，无需获得许可。这并非一项服务，请勿将其用于测试和监控目的。\n\nL’usage de ce domaine est réservé à des exemples de documentation, sans autorisation préalable. Il ne s’agit pas d’un service ; son utilisation à des fins de test ou d",
+   "contentType": "text/html",
+   "markup": ""
+  },
+  "github-login": {
+   "url": "https://github.com/login",
+   "status": 200,
+   "title": "Sign in to GitHub · GitHub",
+   "body": "Skip to content\nSign in to GitHub\nUsername or email address\nPassword\nForgot password?\n\nNew to GitHub? Create an account\n\nTerms\nPrivacy\nDocs\nContact GitHub Support\nManage cookies\nDo not share my personal information",
+   "contentType": "text/html",
+   "markup": ""
+  },
+  "wikipedia-article": {
+   "url": "https://en.wikipedia.org/wiki/Zyzzyva",
+   "status": 200,
+   "title": "Zyzzyva - Wikipedia",
+   "body": "Jump to content\nMain menu\nSearch\nDonate\nCreate account\nLog in\nContents hide\n(Top)\nEtymology\nSpecies\nSee also\nReferences\nZyzzyva\n11 languages\nArticle\nTalk\nRead\nEdit\nView history\nTools\nAppearance hide\nFrom Wikipedia, the free encyclopedia\nFor the magazine, see Zyzzyva (magazine).\nNot to be confused with Zyzzyzus.\nZyzzyva\n\nScientific classification\n\nKingdom:\tAnimalia\nPhylum:\tArthropoda\nClade:\tPancrustacea\nClass:\tInsecta\nOrder:\tColeoptera\nSuborder:\tPolyphaga\nInfraorder:\tCucujiformia\nSuperfamily:\tCur",
+   "contentType": "text/html",
+   "markup": ""
+  },
+  "github-zen-plain-text": {
+   "url": "https://api.github.com/zen",
+   "status": 200,
+   "title": "",
+   "body": "Speak like a human.",
+   "contentType": "text/plain",
+   "markup": ""
+  },
+  "httpbin-json": {
+   "url": "https://httpbin.org/json",
+   "status": 200,
+   "title": "",
+   "body": "{\n  \"slideshow\": {\n    \"author\": \"Yours Truly\", \n    \"date\": \"date of publication\", \n    \"slides\": [\n      {\n        \"title\": \"Wake up to WonderWidgets!\", \n        \"type\": \"all\"\n      }, \n      {\n        \"items\": [\n          \"Why <em>WonderWidgets</em> are great\", \n          \"Who <em>buys</em> WonderWidgets\"\n        ], \n        \"title\": \"Overview\", \n        \"type\": \"all\"\n      }\n    ], \n    \"title\": \"Sample Slide Show\"\n  }\n}\n",
+   "contentType": "application/json",
+   "markup": ""
+  }
+ }
+}

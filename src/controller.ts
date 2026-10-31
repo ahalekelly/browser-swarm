@@ -42,6 +42,7 @@ const RECHECK_MS = 5_000;
 // The pause between a block on headless Chrome and the retry on headed Chrome,
 // so the site does not see two browsers from one IP within moments.
 const RETRY_PAUSE_MS = 10_000;
+const PROBE_DEADLINE_MS = 10_000;
 const HEADED_LEASE_MS = 30 * 86_400_000;
 const HEADED_SITES_FILE = join(ROOT, 'headed-sites.json');
 const PORTS: Record<BrowserName, number> = { chrome: 9377, firefox: 9378, 'chrome-headed': 9379 };
@@ -51,8 +52,18 @@ const PAGE_PROBE = `() => ({
   status: performance.getEntriesByType('navigation')[0]?.responseStatus ?? null,
   title: document.title,
   body: (document.body?.innerText ?? '').slice(0, 500),
-  html: document.contentType === 'text/html',
+  contentType: document.contentType,
+  markup: document.documentElement?.outerHTML.slice(0, 2000) ?? '',
 })`;
+// Agents report blocks the classifier missed; the latest reports are kept
+// as samples for improving it.
+const REPORTS_FILE = join(ROOT, 'blocked-reports.jsonl');
+const REPORTS_KEPT = 100;
+const REPORT_TOOL = {
+  name: 'browser_report_blocked',
+  description: 'Report that the current page is a bot check, an access-denied page, or suspiciously empty or broken. BrowserSwarm reopens it in a browser sites block less often, where this machine has one, and returns the result.',
+  inputSchema: { type: 'object', properties: {} },
+};
 
 // What an agent asks for. On Linux, `chrome` contexts move to the headed
 // browser for sites that block headless Chrome.
@@ -87,8 +98,6 @@ type Context = {
   outputDir: string;
   session?: string;
   client: Client;
-  // The page URL last checked for a challenge.
-  checkedUrl?: string;
   createdAt: number;
   lastActivity: number;
   inFlight: number;
@@ -327,7 +336,7 @@ async function openContext(backend: BackendName, session?: string): Promise<{ id
     browser,
     outputDir,
     session,
-    client: undefined as unknown as Client,
+    client: newClient(),
     createdAt: Date.now(),
     lastActivity: Date.now(),
     // Initialization counts as active work so the sweeper cannot reap a
@@ -339,7 +348,7 @@ async function openContext(backend: BackendName, session?: string): Promise<{ id
   contexts.set(id, context);
   browserState(browser).idleSince = undefined;
   try {
-    context.client = await startChild(context, existing ? sessionFile(session!) : undefined);
+    await connectChild(context, existing ? sessionFile(session!) : undefined);
   } catch (error) {
     contexts.delete(id);
     releaseBrowserIfIdle(browser);
@@ -351,11 +360,16 @@ async function openContext(backend: BackendName, session?: string): Promise<{ id
   return { id, outputDir, ...(session === undefined ? {} : { session: { name: session, existing } }) };
 }
 
-// One Playwright MCP process attached to the context's current browser.
-async function startChild(context: Context, storageState: string | undefined): Promise<Client> {
+function newClient(): Client {
+  return new Client({ name: 'browser-swarm', version: version() }, { capabilities: {} });
+}
+
+// Starts the Playwright MCP process behind context.client, attached to the
+// context's current browser.
+async function connectChild(context: Context, storageState: string | undefined): Promise<void> {
+  const { client } = context;
   const backend = backendFor(context.browser);
   const { userAgent } = browserState(context.browser);
-  const client = new Client({ name: 'browser-swarm', version: version() }, { capabilities: {} });
   const transport = new StdioClientTransport({
     command: process.argv0,
     args: [
@@ -385,7 +399,6 @@ async function startChild(context: Context, storageState: string | undefined): P
   }
   // A Playwright MCP child that dies on its own loses the context with it.
   client.onclose = () => killContext(context, `context ${context.id} is lost: its Playwright MCP process exited`);
-  return client;
 }
 
 // Moves a context to another browser, carrying its cookies and storage
@@ -403,11 +416,11 @@ async function moveContext(context: Context, target: BrowserName): Promise<void>
   context.client.onclose = undefined;
   void context.client.close().catch(() => {});
   context.browser = target;
-  context.checkedUrl = undefined;
+  context.client = newClient();
   browserState(target).idleSince = undefined;
   releaseBrowserIfIdle(previous);
   try {
-    context.client = await startChild(context, exported);
+    await connectChild(context, exported);
     // Playwright MCP reads the storage state when its first tool call
     // creates the browser context.
     await context.client.callTool({ name: 'browser_tabs', arguments: { action: 'list' } }, undefined, { timeout: CALL_DEADLINE_MS });
@@ -484,15 +497,18 @@ async function callTool(id: string, name: string, args: Record<string, unknown>)
   if (withheld(name)) throw new ApiError(400, `${name} is not available through BrowserSwarm`);
   const context = liveContext(id);
   const result = await enqueue(context, true, async () => {
-    const navigation = name === 'browser_navigate' && typeof args.url === 'string' ? args.url : undefined;
-    if (navigation !== undefined && context.browser === 'chrome' && needsHeaded(navigation)) await moveContext(context, 'chrome-headed');
+    if (name === REPORT_TOOL.name) return await reportBlocked(context);
+    if (name !== 'browser_navigate' || typeof args.url !== 'string' || !PLATFORM.headed || context.browser !== 'chrome') {
+      return await invoke(context, name, args);
+    }
+    const { url } = args;
+    if (needsHeaded(url)) await moveContext(context, 'chrome-headed');
     const first = await invoke(context, name, args);
-    if (!PLATFORM.headed || context.browser !== 'chrome' || first.isError) return first;
-    const retry = await blockedUrl(context, first, navigation);
-    if (retry === undefined) return first;
+    if (context.browser !== 'chrome' || first.isError || !await blocked(context, url)) return first;
     await delay(RETRY_PAUSE_MS);
     await moveContext(context, 'chrome-headed');
-    return await invoke(context, 'browser_navigate', { url: retry });
+    learnHeaded(getDomain(url)!);
+    return await invoke(context, name, args);
   });
 
   const content = Array.isArray(result.content) ? result.content : [];
@@ -523,41 +539,67 @@ async function invoke(context: Context, name: string, args: Record<string, unkno
   }
 }
 
-// When a call lands headless Chrome on a new page that stays a bot challenge,
-// learns the site as needing headed Chrome and returns the URL to retry there.
-async function blockedUrl(context: Context, result: ToolResult, navigation: string | undefined): Promise<string | undefined> {
-  const text = (result.content as { text?: string }[]).map((item) => item.text ?? '').join('\n');
-  const pageUrl = text.match(/^- Page URL: (\S+)$/m)?.[1];
-  if (pageUrl === undefined || (navigation === undefined && pageUrl === context.checkedUrl)) return undefined;
-  context.checkedUrl = pageUrl;
-  const requested = navigation ?? pageUrl;
-  const domain = getDomain(requested);
-  if (domain === null) return undefined;
+// An agent's verdict on its current page: kept as a sample, then handled as
+// an automatic detection would be.
+async function reportBlocked(context: Context): Promise<ToolResult> {
+  const page = await probePage(context);
+  if (page === undefined) return toolText('Could not read the current page; navigate to it again and retry.', true);
+  const kept = existsSync(REPORTS_FILE) ? readFileSync(REPORTS_FILE, 'utf8').split('\n').filter(Boolean) : [];
+  kept.push(JSON.stringify({ at: new Date().toISOString(), browser: context.browser, ...page }));
+  writeFileSync(REPORTS_FILE, `${kept.slice(-REPORTS_KEPT).join('\n')}\n`);
+  log(`${context.id} reported ${page.url} as blocked`);
+  if (!PLATFORM.headed || context.browser !== 'chrome') {
+    return toolText('Recorded. This machine has no other browser to retry the page in, so treat the site as blocked.', false);
+  }
+  await delay(RETRY_PAUSE_MS);
+  await moveContext(context, 'chrome-headed');
+  const domain = getDomain(page.url);
+  if (domain !== null) learnHeaded(domain);
+  return await invoke(context, 'browser_navigate', { url: page.url });
+}
+
+function toolText(text: string, isError: boolean): ToolResult {
+  return { content: [{ type: 'text', text }], isError };
+}
+
+// Whether a navigation left headless Chrome on a bot challenge that is still
+// there RECHECK_MS later. Only sites with a registrable domain can be learned.
+async function blocked(context: Context, url: string): Promise<boolean> {
+  if (getDomain(url) === null) return false;
   for (const wait of [0, RECHECK_MS]) {
     await delay(wait);
     const page = await probePage(context);
-    if (page === undefined) return undefined;
-    const markers = challengeMarkers(page, requested);
-    if (markers.length === 0) return undefined;
+    if (page === undefined) return false;
+    const markers = challengeMarkers(page, url);
+    if (markers.length === 0) return false;
     if (wait === RECHECK_MS) log(`${context.id}: ${page.url} challenged headless Chrome (${markers.join(', ')})`);
   }
-  headedSites.set(domain, Date.now() + HEADED_LEASE_MS);
-  saveHeadedSites();
-  log(`${domain} now opens in headed Chrome`);
-  return requested;
+  return true;
 }
 
-// A page mid-navigation cannot be read; that counts as no verdict.
+// A page that cannot be read, mid-navigation or too busy to answer, gives no
+// verdict rather than failing the agent's call.
 async function probePage(context: Context): Promise<PageState | undefined> {
-  const result = await invoke(context, 'browser_evaluate', { function: PAGE_PROBE });
+  const result = await context.client.callTool(
+    { name: 'browser_evaluate', arguments: { function: PAGE_PROBE } },
+    undefined,
+    { timeout: PROBE_DEADLINE_MS },
+  ).catch(() => undefined);
+  if (result === undefined || result.isError) return undefined;
   const text = (result.content as { text?: string }[]).map((item) => item.text ?? '').join('\n');
   const json = text.match(/^### Result\n([\s\S]*?)\n### /m)?.[1];
-  return result.isError || json === undefined ? undefined : JSON.parse(json);
+  return json === undefined ? undefined : JSON.parse(json);
 }
 
 function needsHeaded(url: string): boolean {
   const domain = getDomain(url);
   return domain !== null && (headedSites.get(domain) ?? 0) > Date.now();
+}
+
+function learnHeaded(domain: string): void {
+  headedSites.set(domain, Date.now() + HEADED_LEASE_MS);
+  saveHeadedSites();
+  log(`${domain} now opens in headed Chrome`);
 }
 
 function loadHeadedSites(): void {
@@ -579,7 +621,7 @@ function saveHeadedSites(): void {
 async function listTools(id: string): Promise<{ tools: unknown[] }> {
   const context = liveContext(id);
   const result = await enqueue(context, true, () => context.client.listTools());
-  return { tools: result.tools.filter((tool) => !withheld(tool.name)) };
+  return { tools: [...result.tools.filter((tool) => !withheld(tool.name)), REPORT_TOOL] };
 }
 
 function withheld(name: string): boolean {
@@ -667,6 +709,7 @@ function snapshot(): Record<string, unknown> {
       lastCrash: state.lastCrash ?? null,
     })),
     contexts: [...contexts.values()].filter((context) => !context.dead).length,
+    blockedReports: existsSync(REPORTS_FILE) ? readFileSync(REPORTS_FILE, 'utf8').split('\n').filter(Boolean).length : 0,
     headedSites: [...headedSites]
       .filter(([, until]) => until > Date.now())
       .map(([domain, until]) => ({ domain, until: new Date(until).toISOString() })),

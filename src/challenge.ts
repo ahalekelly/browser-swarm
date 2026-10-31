@@ -3,7 +3,10 @@
 // Status codes follow docs/bot-detection.md: AWS WAF challenges with 202 and
 // 405, Kasada with 429, Fastly with 406.
 const CHALLENGE_STATUS = new Set([202, 403, 405, 406, 429]);
-const CHALLENGE_BODY = /captcha-delivery|just a moment|cf-chl-|px-captcha|window\.gokuProps|challenge-container|Incapsula incident ID|the requested url was rejected|Radware Captcha Page|botdetect\.min\.js|sucuri website firewall/i;
+// Quiet blocks serve a normal-looking 200 and are recognized by their text:
+// Amazon's continue-shopping interstitial and robot check, and CNN's
+// plain-text page that is only "Unknown Error".
+const CHALLENGE_BODY = /^\s*unknown error\s*$|click the button below to continue shopping|not a robot|captcha-delivery|just a moment|cf-chl-|px-captcha|window\.gokuProps|challenge-container|Incapsula incident ID|the requested url was rejected|Radware Captcha Page|botdetect\.min\.js|sucuri website firewall/i;
 const CHALLENGE_TITLE = /^just a moment|access denied|error page|attention required|pardon our interruption|are you a human|verify you are human/i;
 const CHALLENGE_PATH_SEGMENT = /captcha|challenge/i;
 const CHALLENGE_HOST = /(^|\.)(perfdrive\.com|queue-it\.net|captcha-delivery\.com)$/i;
@@ -18,7 +21,9 @@ export type PageState = {
   title: string;
   // The page's first 500 characters of visible text.
   body: string;
-  html: boolean;
+  contentType: string;
+  // The first 2000 characters of the page's HTML.
+  markup: string;
 };
 
 // `requestedUrl` is what the visitor asked for; path segments it already
@@ -33,7 +38,10 @@ export function challengeMarkers(page: PageState, requestedUrl: string): string[
   }
   if (CHALLENGE_TITLE.test(page.title)) markers.push('challenge-title');
   if (CHALLENGE_BODY.test(page.body)) markers.push('challenge-body');
-  if (page.html && page.status !== null && page.status < 400 && page.title.trim() === '' && page.body.trim().length < 100) markers.push('empty-page');
+  // Size alone cannot tell a quiet block from a small real page: example.com
+  // is as short as Amazon's interstitial, and a plain-text API answer as short
+  // as CNN's block. Only an untitled near-empty HTML page counts.
+  if (page.contentType === 'text/html' && page.status !== null && page.status < 400 && page.title.trim() === '' && page.body.trim().length < 100) markers.push('empty-page');
   return markers;
 }
 

@@ -16,6 +16,8 @@ Tab hygiene: every open tab holds a renderer process and about 100–200 MB. Nev
 
 Media hygiene: the shared browser is muted, but playing video and audio still burns CPU that every other agent shares. On a video page, prefer a transcript, captions, or page metadata over watching the media, and pause anything that autoplays when you land — `evaluate` with `document.querySelectorAll('video,audio').forEach(m => m.pause())`.
 
+When a page is a bot check, an "access denied" page, or suspiciously empty or broken, call `report_blocked` (`browser_report_blocked` over MCP) once: it reopens the page in a browser sites block less often where one exists, and returns the new page.
+
 Never launch a browser yourself. Your context lives in a shared browser owned by a machine-wide service. When you cannot get one, or a working context starts failing, stop and report the message you got; the orchestrator restarts the service. Do not fall back to curl or plain HTTP, which usually defeats the point of a browser agent; flag any substitution prominently in your final message.
 
 A context is released after 5 minutes with no calls, and losing it ends your browser access. If calls start failing after an idle gap, stop and tell the orchestrator to relaunch you.

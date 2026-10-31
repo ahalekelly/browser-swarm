@@ -19,7 +19,7 @@ test('the adapter serves one context and closes it on browser_close', async (t) 
 
   const tools = await call(session, 2, 'tools/list', {});
   const names = tools.result.tools.map((tool) => tool.name);
-  assert.deepEqual(names, ['browser_navigate', 'browser_tabs', 'browser_take_screenshot', 'browser_close']);
+  assert.deepEqual(names, ['browser_navigate', 'browser_tabs', 'browser_take_screenshot', 'browser_report_blocked', 'browser_close']);
 
   const navigated = await call(session, 3, 'tools/call', { name: 'browser_navigate', arguments: { url: 'https://example.com/mcp' } });
   assert.deepEqual(navigated.result.content, [{ type: 'text', text: 'navigated to https://example.com/mcp\n### Page\n- Page URL: https://example.com/mcp\n- Page Title: Fake page' }]);

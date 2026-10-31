@@ -95,7 +95,7 @@ async function command(verb: string, args: string[]): Promise<void> {
     return;
   }
   if (verb === 'status') {
-    const status = await api('GET', '/status') as { port: number; contexts: number; browsers: BrowserInfo[]; headedSites: { domain: string; until: string }[] };
+    const status = await api('GET', '/status') as { port: number; contexts: number; browsers: BrowserInfo[]; blockedReports: number; headedSites: { domain: string; until: string }[] };
     console.log(`controller on 127.0.0.1:${status.port}, ${status.contexts} context${status.contexts === 1 ? '' : 's'}`);
     if (status.browsers.length === 0) console.log('no browser started yet');
     for (const browser of status.browsers) {
@@ -105,6 +105,7 @@ async function command(verb: string, args: string[]): Promise<void> {
       if (browser.lastCrash) console.log(`  last crash: ${browser.lastCrash}`);
     }
     for (const site of status.headedSites) console.log(`headed Chrome for ${site.domain} until ${site.until.slice(0, 10)}`);
+    if (status.blockedReports > 0) console.log(`${status.blockedReports} agent-reported blocked page${status.blockedReports === 1 ? '' : 's'} in blocked-reports.jsonl`);
     return;
   }
   throw new UsageError(`unknown command ${verb}`);

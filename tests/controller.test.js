@@ -46,7 +46,7 @@ test('the dangerous and lifecycle-colliding tools are hidden and refused', async
   const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body;
 
   const tools = (await controller.call('POST', `/contexts/${id}/tools`)).body.tools.map((tool) => tool.name);
-  assert.deepEqual(tools, ['browser_navigate', 'browser_tabs', 'browser_take_screenshot']);
+  assert.deepEqual(tools, ['browser_navigate', 'browser_tabs', 'browser_take_screenshot', 'browser_report_blocked']);
 
   for (const name of ['browser_run_code_unsafe', 'browser_close']) {
     const refused = await controller.call('POST', `/contexts/${id}/call`, { name, arguments: {} });
@@ -376,7 +376,7 @@ test('session names are validated and storage tools stay controller-only', async
 
   const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome', session: 'shop-2' })).body;
   const tools = (await controller.call('POST', `/contexts/${id}/tools`)).body.tools.map((tool) => tool.name);
-  assert.deepEqual(tools, ['browser_navigate', 'browser_tabs', 'browser_take_screenshot']);
+  assert.deepEqual(tools, ['browser_navigate', 'browser_tabs', 'browser_take_screenshot', 'browser_report_blocked']);
   for (const name of ['browser_cookie_list', 'browser_storage_state']) {
     const refused = await controller.call('POST', `/contexts/${id}/call`, { name, arguments: {} });
     assert.equal(refused.status, 400);
@@ -425,6 +425,34 @@ test('a site that blocks headless Chrome moves the context to headed Chrome, kee
   const saved = JSON.parse(fs.readFileSync(path.join(fixture.dir, 'sessions/shop.json'), 'utf8'));
   // The headless visit's datadome cookie stayed behind.
   assert.deepEqual(saved.cookies.map((cookie) => cookie.name), ['visited', 'visited', 'visited']);
+});
+
+test('an agent report of a blocked page moves the context to headed Chrome and keeps a sample', linuxOnly, async (t) => {
+  const fixture = await createFixture(t);
+  installFakeFirefox(fixture.dir);
+  const controller = await startController(t, fixture);
+  const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body;
+  const tools = (await controller.call('POST', `/contexts/${id}/tools`)).body.tools.map((tool) => tool.name);
+  assert.ok(tools.includes('browser_report_blocked'));
+
+  await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_navigate', arguments: { url: 'https://quiet.example/page' } });
+  const reported = await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_report_blocked', arguments: {} });
+  assert.equal(reported.body.text, 'navigated to https://quiet.example/page\n### Page\n- Page URL: https://quiet.example/page\n- Page Title: Fake page');
+  assert.equal((await controller.call('GET', '/contexts')).body.contexts[0].browser, 'chrome-headed');
+  const status = (await controller.call('GET', '/status')).body;
+  assert.deepEqual(status.headedSites.map((site) => site.domain), ['quiet.example']);
+
+  const firefox = (await controller.call('POST', '/contexts', { backend: 'firefox' })).body.id;
+  await controller.call('POST', `/contexts/${firefox}/call`, { name: 'browser_navigate', arguments: { url: 'https://other.example/' } });
+  const recorded = await controller.call('POST', `/contexts/${firefox}/call`, { name: 'browser_report_blocked', arguments: {} });
+  assert.match(recorded.body.text, /no other browser/);
+
+  const samples = fs.readFileSync(path.join(fixture.dir, 'blocked-reports.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepEqual(samples.map((sample) => [sample.browser, sample.url, sample.markup]), [
+    ['chrome', 'https://quiet.example/page', '<html></html>'],
+    ['firefox', 'https://other.example/', '<html></html>'],
+  ]);
+  assert.equal((await controller.call('GET', '/status')).body.blockedReports, 2);
 });
 
 test('learned sites load at startup, open straight in headed Chrome, and expire', linuxOnly, async (t) => {

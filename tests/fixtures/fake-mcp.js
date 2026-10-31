@@ -69,7 +69,7 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
     }
     // The controller's challenge probe.
     if (name === 'browser_evaluate') {
-      const page = { url, status: challenged() ? 403 : 200, title: challenged() ? 'Access Denied' : 'Fake page', body: 'x'.repeat(200), html: true };
+      const page = { url, status: challenged() ? 403 : 200, title: challenged() ? 'Access Denied' : 'Fake page', body: 'x'.repeat(200), contentType: 'text/html', markup: '<html></html>' };
       return send(message.id, { content: [{ type: 'text', text: `### Result\n${JSON.stringify(page, null, 2)}\n### Ran Playwright code\n` }] });
     }
     if (name === 'browser_tabs') {

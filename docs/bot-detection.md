@@ -9,10 +9,10 @@ Findings were measured on live commercial sites from July to October 2026. Detec
 | Detection system | Path | Confidence |
 |---|---|---|
 | None / light | Shared headless Chrome | — |
-| Cloudflare managed challenge | Headed Chrome; headless engines are challenged | live-confirmed |
+| Cloudflare managed challenge | Chrome, headless or headed; Firefox is challenged | live-confirmed |
 | **Akamai** | Headed Chrome or headless Firefox | live-confirmed, both |
 | **DataDome**, alone or stacked | Nothing renders reliably. Skip the browser | live-confirmed negative |
-| **PerimeterX** | Headed Chrome or headed Firefox | live-confirmed |
+| **PerimeterX** | Chrome, headless or headed, or headed Firefox | live-confirmed |
 
 On Linux, headless Chrome contexts reach headed Chrome by themselves: the controller learns which sites block headless Chrome (see the README).
 
@@ -20,7 +20,7 @@ On Linux, headless Chrome contexts reach headed Chrome by themselves: the contro
 
 DataDome is also **adaptive** — a site served a first-hit 200 to a bare probe, then 403'd focused repeat visits. A single 200 is not proof a site renders reliably; probe more than once.
 
-**Akamai is the opposite case:** several engines render on it. Headless Firefox is the cheapest; headed Chrome renders it too, headless Chrome does not.
+**Akamai is the opposite case:** several engines render on it. Headed Chrome and headless Firefox do; headless Chrome does not, even with its user agent corrected.
 
 Where a browser isn't strictly required, the more reliable path is not to drive the protected HTML at all: sites' own JSON APIs — platform cart and rate endpoints, search APIs — stay open, because blocking them would break the site itself.
 
@@ -28,7 +28,9 @@ Where a browser isn't strictly required, the more reliable path is not to drive 
 
 Google Chrome stable is current, updates itself, keeps CRLSet revocation updates, and reports the `Google Chrome` brand in client hints, which Playwright's bundled Chromium does not. Patched builds like fingerprint-chromium and cloakbrowser lag Chrome by several milestones and carry their own bugs; fingerprint-chromium crashed its renderer on a quarter of DataDome visits.
 
-Headed matters for Chrome. On five protected targets, headed Chrome in Xvfb rendered 75/100 trials against 20/100 for headless Chrome with its `HeadlessChrome` user agent, and headed Chrome costs about 2.7× the memory and much more CPU. See [the October 2026 comparison](reports/2026-10-31-chrome-firefox-headed.md). BrowserSwarm therefore runs headless Chrome with the user agent corrected and moves a site to headed Chrome only after it blocks headless. LIVE_CHECK_PLACEHOLDER
+Headed matters for Chrome. On five protected targets, headed Chrome in Xvfb rendered 75/100 trials against 20/100 for headless Chrome with its `HeadlessChrome` user agent, and headed Chrome costs about 2.7× the memory and much more CPU. See [the October 2026 comparison](reports/2026-10-31-chrome-firefox-headed.md). BrowserSwarm therefore runs headless Chrome with the user agent corrected and moves a site to headed Chrome only after it blocks headless.
+
+Correcting the user agent closes most of the gap. In a same-run check on 2026-10-31 (5 trials per target), UA-corrected headless Chrome rendered Cloudflare's managed challenge 4/5 (headed 3/5), TheRealReal's PerimeterX 5/5 (headed 5/5), Amazon and CNN 5/5 like headed, and DataDome-behind-Cloudflare Hermès 5/5; Akamai still blocked it 0/5 against 5/5 headed, and Leboncoin's DataDome blocked it from the second visit on. The October comparison above used the `HeadlessChrome` user agent, which drew 0/20 on Cloudflare and PerimeterX, Amazon's continue-shopping interstitial, and CNN's plain-text "Unknown Error".
 
 Headless Chrome's only fingerprint leak is the user agent string; its client hints and WebGL (on the host GPU through Vulkan) match headed Chrome. The controller replaces `HeadlessChrome` with `Chrome` through Playwright's context UA override, which covers frames, workers and popups. Playwright derives the client-hint metadata it sends from the UA string. On Linux that matches real Chrome exactly. On macOS the frozen UA `Intel Mac OS X 10_15_7` makes high-entropy hints report `architecture "x86"` and `platformVersion "10_15_7"`, where real Chrome on Apple silicon reports `arm` and the macOS version.
 
@@ -73,6 +75,8 @@ One engine family this rules out entirely: **CDP-minimal drivers — zendriver, 
 ## Identifying the detection system
 
 Load the homepage and inspect cookies, headers, body, and the **final URL**. The MCP reports HTTP status in its navigate result.
+
+**Quiet blocks** look like ordinary pages: a 200 with a short body. Amazon serves a titled 146-character "continue shopping" interstitial; CNN serves a plain-text "Unknown Error". Size alone cannot separate these from real small pages — example.com is as short as Amazon's interstitial, and a plain-text API answer like `api.github.com/zen` is as short as CNN's. BrowserSwarm's classifier therefore counts only an untitled near-empty HTML page as empty, and recognizes quiet blocks by their text; agents report the rest with `report_blocked`, whose samples feed new markers. [`tests/challenge.test.js`](../tests/challenge.test.js) checks the line against captured pages.
 
 **Never key a detector on "403 means blocked."** Most systems don't use it. AWS WAF's challenge is **202** with an often-empty body, which naive clients read as success; its CAPTCHA is **405**. Kasada's normal first challenge is **429**. Fastly's Next-Gen WAF blocks with **406**. Radware Bot Manager and Queue-it never return a non-2xx at all — they redirect to another host. Imperva sometimes serves its block page under a plain **200**. A short body with an empty title and a 200 status is a block until proven otherwise; check the body, the final host, or a screenshot.
 

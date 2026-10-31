@@ -7,9 +7,10 @@ import { request as httpRequest } from 'node:http';
 import { PORT, SERVICE_HINT, TOKEN_FILE } from './config.ts';
 
 const CONNECT_DEADLINE_MS = 10_000;
-// Longer than the controller's own 120s call deadline, plus room for a call
-// that waits its turn behind another on the same context.
-const TOTAL_DEADLINE_MS = 300_000;
+// Room for a call that waits its turn behind another on the same context,
+// and for a navigation that moves its context to headed Chrome, which chains
+// several of the controller's 120s call deadlines.
+const TOTAL_DEADLINE_MS = 600_000;
 const HOST = `127.0.0.1:${PORT}`;
 
 export class ApiError extends Error {
