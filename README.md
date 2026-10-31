@@ -53,11 +53,11 @@ Ctrl-C or a dropped connection leaves the saved session as it was. `login` refus
 
 The tunnel keeps port 9377 loopback-only on the host. While it is up, anything on your machine that reaches local port 9377 can drive the shared browser, so close it after logging in.
 
-The controller runs as a user service, so starting and stopping it belongs to the service manager:
+The controller runs as a user service and only picks up new code or a new `node` binary when restarted:
 
 ```sh
-systemctl --user restart browser-swarm          # Linux; journalctl --user -u browser-swarm for logs
-launchctl kickstart -k gui/$UID/com.browser-swarm.controller   # macOS; logs in controller.log
+systemctl --user restart browser-swarm   # Linux; journalctl --user -u browser-swarm for logs
+./install-controller-service.sh          # macOS; logs in controller.log
 ```
 
 ## Tests
