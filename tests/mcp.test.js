@@ -28,6 +28,11 @@ test('the adapter serves one context and closes it on browser_close', async (t) 
   const closed = await call(session, 4, 'tools/call', { name: 'browser_close', arguments: {} });
   assert.match(closed.result.content[0].text, /^Closed browser context c[0-9a-f]{16}\.$/);
   assert.deepEqual((await controller.call('GET', '/contexts')).body.contexts, []);
+
+  const resumed = await call(session, 5, 'tools/call', { name: 'browser_navigate', arguments: { url: 'https://example.com/followup' } });
+  assert.equal(resumed.result.isError, true);
+  assert.match(resumed.result.content[0].text, /This MCP session is closed.*spawn a fresh browser-swarm agent/);
+  assert.deepEqual((await controller.call('GET', '/contexts')).body.contexts, []);
 });
 
 test('a failing tool comes back as a tool error, not a dead session', async (t) => {
