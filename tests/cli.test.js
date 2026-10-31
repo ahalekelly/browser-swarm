@@ -119,7 +119,7 @@ test('login opens the page, waits for Enter, and saves the session', async (t) =
   const command = [process.execPath, fixture.cli, 'login', 'shop', 'https://example.com/login'].join(' ');
   const env = { ...process.env, ...NO_SANDBOX_PROXY };
   const runLogin = () => process.platform === 'darwin'
-    ? run('expect', ['-c', `spawn -noecho ${command}; expect { "press Enter" { send "\\r"; expect eof } eof }; exit [lindex [wait] 3]`], { env })
+    ? run('expect', ['-c', `spawn -noecho ${command}; expect { "press Enter" { send "\\r"; expect eof } eof {} timeout { exit 124 } }; exit [lindex [wait] 3]`], { env })
     : run('script', ['-qec', command, '/dev/null'], { input: '\n', env });
 
   // An open context of the session would later overwrite the new login.
