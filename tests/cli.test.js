@@ -114,18 +114,20 @@ test('login opens the page, waits for Enter, and saves the session', async (t) =
   await startController(t, fixture);
 
   // login insists on a terminal, so `script` gives it one; its output arrives
-  // on stdout with the terminal's line endings. Enter comes from a file: BSD
-  // script exits on the socket spawnSync would use for stdin.
+  // on stdout with the terminal's line endings. Enter comes through a fifo
+  // that stays open for the whole run: BSD script dies on the socket spawnSync
+  // would use for stdin, and at EOF it sends ^D ahead of unforwarded input.
   const enter = path.join(fixture.dir, 'enter');
-  fs.writeFileSync(enter, '\n');
+  run('mkfifo', [enter]);
   const command = [process.execPath, fixture.cli, 'login', 'shop', 'https://example.com/login'];
   const scriptArgs = process.platform === 'darwin' ? ['-q', '/dev/null', ...command] : ['-qec', command.join(' '), '/dev/null'];
   const runLogin = () => {
-    const stdin = fs.openSync(enter, 'r');
+    const fifo = fs.openSync(enter, 'r+');
+    fs.writeSync(fifo, '\n');
     try {
-      return run('script', scriptArgs, { stdio: [stdin, 'pipe', 'pipe'], env: { ...process.env, ...NO_SANDBOX_PROXY } });
+      return run('script', scriptArgs, { stdio: [fifo, 'pipe', 'pipe'], env: { ...process.env, ...NO_SANDBOX_PROXY } });
     } finally {
-      fs.closeSync(stdin);
+      fs.closeSync(fifo);
     }
   };
 
