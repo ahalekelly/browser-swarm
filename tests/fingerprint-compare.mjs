@@ -8,17 +8,19 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright-core';
+import { chromium, firefox } from 'playwright-core';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIGS = {
   stock: { browser: 'playwright', platform: null, display: 'headless' },
   linux: { browser: 'fingerprint', platform: 'linux', display: 'headless' },
-  'linux-headed': { browser: 'fingerprint', platform: 'linux', display: 'xvfb' },
+  'linux-headed': { browser: 'fingerprint', platform: 'linux', display: 'headed' },
   macos: { browser: 'fingerprint', platform: 'macos', display: 'headless' },
   windows: { browser: 'fingerprint', platform: 'windows', display: 'headless' },
   chrome: { browser: 'chrome', platform: 'linux', display: 'headless' },
-  'chrome-headed': { browser: 'chrome', platform: 'linux', display: 'xvfb' },
+  'chrome-headed': { browser: 'chrome', platform: 'linux', display: 'headed' },
+  firefox: { browser: 'firefox', platform: null, display: 'headless' },
+  'firefox-headed': { browser: 'firefox', platform: null, display: 'headed' },
 };
 const CHROME_BINARY = '/usr/bin/google-chrome-stable';
 // Xvfb has no GPU, so Chrome's default GL backend leaves WebGL unavailable.
@@ -114,20 +116,41 @@ async function run(options) {
 
 async function launch(config, seed) {
   const variant = CONFIGS[config];
-  if (config === 'stock') {
+  if (variant.display === 'headed' && !process.env.DISPLAY) fail(`${config} needs an X display; run under xvfb-run -a -s '-screen 0 1920x1080x24'`);
+  // A display changes headless browsers too: headless Firefox gains WebGL.
+  const { DISPLAY, ...headlessEnv } = process.env;
+  const env = variant.display === 'headed' ? process.env : headlessEnv;
+  if (variant.browser === 'playwright') {
     const binary = chromium.executablePath();
     if (!existsSync(binary)) fail(`stock Playwright Chromium is not installed (run ${join(ROOT, 'node_modules/.bin/playwright')} install chromium)`);
     const browser = await chromium.launch({ headless: true });
     return { browser, close: () => browser.close() };
   }
+  if (variant.browser === 'firefox') {
+    // Matches the controller's Firefox backend: a Playwright server the swarm connects to.
+    const server = await firefox.launchServer({
+      headless: variant.display === 'headless',
+      firefoxUserPrefs: { 'media.volume_scale': '0.0' },
+      env,
+    });
+    const browser = await firefox.connect(server.wsEndpoint());
+    return {
+      browser,
+      close: async () => {
+        await browser.close();
+        await server.close();
+      },
+    };
+  }
 
   const host = hostConfig();
-  if ((variant.display === 'xvfb' || variant.browser === 'chrome') && process.platform !== 'linux') fail(`${config} is only available on Linux`);
+  if (variant.browser === 'chrome' && process.platform !== 'linux') fail(`${config} is only available on Linux`);
   const binary = variant.browser === 'chrome' ? CHROME_BINARY : host.binary;
   if (!existsSync(binary)) fail(`${variant.browser === 'chrome' ? 'Google Chrome' : 'fingerprint-chromium'} is not installed at ${binary}`);
   const port = await freePort();
   const profile = mkdtempSync(join(tmpdir(), 'fingerprint-compare-'));
-  const browserArgs = [
+  const [program, ...args] = [
+    ...host.lowPriority,
     binary,
     ...(variant.display === 'headless' ? ['--headless'] : ['--window-size=1920,1080']),
     ...(variant.browser === 'chrome' ? CHROME_GPU_ARGS : [
@@ -139,18 +162,14 @@ async function launch(config, seed) {
     `--user-data-dir=${profile}`,
     '--no-first-run',
   ];
-  const [program, ...args] = variant.display === 'xvfb'
-    ? ['xvfb-run', '--auto-servernum', '--server-args=-screen 0 1920x1080x24', ...host.lowPriority, ...browserArgs]
-    : [...host.lowPriority, ...browserArgs];
   let browserLog = '';
-  // xvfb-run does not forward signals to the browser, so signal the whole group.
-  // 'close' waits for every process holding stderr, including the browser.
-  const child = spawn(program, args, { detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
+  const child = spawn(program, args, { env, stdio: ['ignore', 'ignore', 'pipe'] });
+  // 'close' waits for every process holding stderr, including browser helpers.
   const closed = new Promise((resolveClose) => child.once('close', resolveClose));
   const stop = async () => {
-    process.kill(-child.pid, 'SIGTERM');
+    child.kill('SIGTERM');
     if (await Promise.race([closed.then(() => true), delay(10_000).then(() => false)])) return;
-    process.kill(-child.pid, 'SIGKILL');
+    child.kill('SIGKILL');
     await closed;
   };
   child.stderr.on('data', (chunk) => {
@@ -454,7 +473,7 @@ function detectSystems(body, cookies) {
 }
 
 function consistencyLeaks(config, trials) {
-  const platform = config === 'stock' ? trials[0].host.startsWith('darwin ') ? 'macos' : 'linux' : CONFIGS[config].platform;
+  const platform = CONFIGS[config].platform === null ? trials[0].host.startsWith('darwin ') ? 'macos' : 'linux' : CONFIGS[config].platform;
   const expected = {
     linux: { navigator: 'Linux x86_64', ua: /Linux/, hints: 'Linux' },
     macos: { navigator: 'MacIntel', ua: /Mac OS X/, hints: 'macOS' },
@@ -471,7 +490,7 @@ function consistencyLeaks(config, trials) {
     if (fingerprint.platform !== expected.navigator) leaks.add(`navigator.platform=${fingerprint.platform}`);
     if (!expected.ua.test(fingerprint.userAgent) || /HeadlessChrome/.test(fingerprint.userAgent)) leaks.add(`UA=${fingerprint.userAgent}`);
     if (fingerprint.webdriver) leaks.add('navigator.webdriver=true');
-    if (fingerprint.clientHints?.platform !== expected.hints) leaks.add(`client hints platform=${fingerprint.clientHints?.platform}`);
+    if (CONFIGS[config].browser !== 'firefox' && fingerprint.clientHints?.platform !== expected.hints) leaks.add(`client hints platform=${fingerprint.clientHints?.platform}`);
     const headerPlatform = trial.requestHeaders['sec-ch-ua-platform'];
     if (headerPlatform && headerPlatform.replaceAll('"', '') !== expected.hints) leaks.add(`sec-ch-ua-platform=${headerPlatform}`);
     if (!fingerprint.webgl) {
@@ -532,7 +551,7 @@ function usage() {
   node tests/fingerprint-compare.mjs run --configs stock,macos,linux,windows --targets creepjs,browserleaks-javascript --trials-per-target 1 --spacing-seconds 0 [--settle-seconds 8] --jsonl results.jsonl --report report.md
   node tests/fingerprint-compare.mjs report --jsonl results.jsonl --report report.md [--run-id ID]
 
-Configs: ${Object.keys(CONFIGS).join(', ')}. linux-headed and chrome-headed use Xvfb; they and chrome are only available on Linux.
+Configs: ${Object.keys(CONFIGS).join(', ')}. Headed configs need an X display: run under xvfb-run -a -s '-screen 0 1920x1080x24'. chrome and chrome-headed run Google Chrome on Linux.
 Targets may be built-in names or label=https://url.`);
   process.exit(command === 'help' ? 0 : 2);
 }
