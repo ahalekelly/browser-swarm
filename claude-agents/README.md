@@ -8,7 +8,7 @@ Generates `browser-swarm` and `browser-swarm-firefox` in `~/.claude/agents/`, wi
 
 The definitions declare no MCP server, so any number of them can run at once. Both withhold the `Agent` tool: a browser task is cheap to do and expensive to delegate.
 
-Use `browser-swarm-firefox` only for sites confirmed to block Chromium. It gets an isolated context on one shared Playwright Firefox process.
+Use `browser-swarm-firefox` only for sites confirmed to block Chrome. It gets an isolated context on one shared Playwright Firefox process.
 
 Keep fan-outs to about 10 concurrent agents. Each context uses roughly 100–200 MB with the 2-tab cap. Contexts are released after five idle minutes; relaunch when browser work resumes.
 

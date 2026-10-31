@@ -2,9 +2,7 @@ node_modules/
 *.log
 .DS_Store
 .claude/
-fingerprint-chromium/
-chromium-browser-profile/
-firefox-browser-profile/
-fingerprint-seed
+*-browser-profile/
+headed-sites.json
 controller-token
 sessions/

@@ -4,7 +4,7 @@
 ./install-agents.sh
 ```
 
-Requires the Codex CLI. Registers `playwright` in the parent Codex configuration as `swarm mcp chromium`, this checkout's stdio adapter, and generates `browser-swarm` from `browser-swarm.template.toml`, the shared [operating prompt](../agent-prompt.md) and the Codex tooling paragraph in [tooling.md](tooling.md). Both files live under `CODEX_HOME` (default `~/.codex`). Run it again after moving the checkout, then start a new Codex session.
+Requires the Codex CLI. Registers `playwright` in the parent Codex configuration as `swarm mcp chrome`, this checkout's stdio adapter, and generates `browser-swarm` from `browser-swarm.template.toml`, the shared [operating prompt](../agent-prompt.md) and the Codex tooling paragraph in [tooling.md](tooling.md). Both files live under `CODEX_HOME` (default `~/.codex`). Run it again after moving the checkout, then start a new Codex session.
 
 Codex agents use MCP rather than the `swarm` CLI because Codex's command sandbox blocks all network access. Each MCP session owns one context in the shared controller and closes it on `browser_close`, on session end, or after five idle minutes excluding time with a request in flight.
 

@@ -9,23 +9,18 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, firefox } from 'playwright-core';
+import { challengeMarkers } from '../src/challenge.ts';
+import { CHROME_BINARY, chromeArgs, disableSafeBrowsing, headlessUserAgent } from '../src/chrome.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+// chrome and chrome-headed run Google Chrome exactly as the controller does.
 const CONFIGS = {
-  stock: { browser: 'playwright', platform: null, display: 'headless' },
-  linux: { browser: 'fingerprint', platform: 'linux', display: 'headless' },
-  'linux-headed': { browser: 'fingerprint', platform: 'linux', display: 'headed' },
-  macos: { browser: 'fingerprint', platform: 'macos', display: 'headless' },
-  windows: { browser: 'fingerprint', platform: 'windows', display: 'headless' },
-  chrome: { browser: 'chrome', platform: 'linux', display: 'headless' },
-  'chrome-headed': { browser: 'chrome', platform: 'linux', display: 'headed' },
-  firefox: { browser: 'firefox', platform: null, display: 'headless' },
-  'firefox-headed': { browser: 'firefox', platform: null, display: 'headed' },
+  stock: { browser: 'playwright', display: 'headless' },
+  chrome: { browser: 'chrome', display: 'headless' },
+  'chrome-headed': { browser: 'chrome', display: 'headed' },
+  firefox: { browser: 'firefox', display: 'headless' },
+  'firefox-headed': { browser: 'firefox', display: 'headed' },
 };
-const CHROME_BINARY = '/usr/bin/google-chrome-stable';
-// Xvfb has no GPU, so Chrome's default GL backend leaves WebGL unavailable.
-// Vulkan reaches the host GPU without going through the X server.
-const CHROME_GPU_ARGS = ['--use-angle=vulkan', '--enable-features=Vulkan'];
 const TARGETS = {
   creepjs: 'https://abrahamjuliot.github.io/creepjs/',
   'browserleaks-webgl': 'https://browserleaks.com/webgl',
@@ -53,9 +48,6 @@ const DETECTION_BODY_MARKERS = {
   queueIt: /queueclient\.min\.js|botdetect\.min\.js/i,
   sucuri: /sucuri website firewall/i,
 };
-const CHALLENGE_BODY = /captcha-delivery|just a moment|cf-chl-|px-captcha|window\.gokuProps|challenge-container|Incapsula incident ID|the requested url was rejected|Radware Captcha Page|botdetect\.min\.js|sucuri website firewall/i;
-const CHALLENGE_PATH_SEGMENT = /captcha|challenge|validate\.perfdrive\.com|queue-it\.net/i;
-const CHALLENGE_TITLE = /^just a moment|access denied|error page|attention required|pardon our interruption|are you a human|verify you are human/i;
 const DETECTION_COOKIE_MARKERS = {
   akamai: /^(?:_abck|bm_sz|ak_bmsc|bm_sv|bm_lso)$/,
   datadome: /^datadome$/,
@@ -90,18 +82,17 @@ async function run(options) {
 
   const sessions = [];
   try {
-    for (const config of configs) sessions.push(await launch(config, options.seed));
+    for (const config of configs) sessions.push(await launch(config));
     for (let scheduleIndex = 0; scheduleIndex < schedule.length; scheduleIndex += 1) {
       const { trial, target, configIndex } = schedule[scheduleIndex];
       const config = configs[configIndex];
-      const record = await measure(sessions[configIndex].browser, {
+      const record = await measure(sessions[configIndex], {
         runId,
         config,
         configIndex: configIndex + 1,
         trial,
         target,
         settleMs: options.settleMs,
-        seed: options.seed,
       });
       appendFileSync(options.jsonl, `${JSON.stringify(record)}\n`);
       console.log(`${config} ${target.name} ${trial}/${options.trialsPerTarget}: ${record.rendered ? 'rendered' : record.challenge.join(', ')}`);
@@ -114,7 +105,7 @@ async function run(options) {
   renderReport({ jsonl: options.jsonl, report: options.report, runId });
 }
 
-async function launch(config, seed) {
+async function launch(config) {
   const variant = CONFIGS[config];
   if (variant.display === 'headed' && !process.env.DISPLAY) fail(`${config} needs an X display; run under xvfb-run -a -s '-screen 0 1920x1080x24'`);
   // A display changes headless browsers too: headless Firefox gains WebGL.
@@ -143,25 +134,12 @@ async function launch(config, seed) {
     };
   }
 
-  const host = hostConfig();
-  if (variant.browser === 'chrome' && process.platform !== 'linux') fail(`${config} is only available on Linux`);
-  const binary = variant.browser === 'chrome' ? CHROME_BINARY : host.binary;
-  if (!existsSync(binary)) fail(`${variant.browser === 'chrome' ? 'Google Chrome' : 'fingerprint-chromium'} is not installed at ${binary}`);
+  if (variant.display === 'headed' && process.platform !== 'linux') fail(`${config} is only available on Linux`);
+  if (!existsSync(CHROME_BINARY)) fail(`Google Chrome is not installed at ${CHROME_BINARY}`);
   const port = await freePort();
   const profile = mkdtempSync(join(tmpdir(), 'fingerprint-compare-'));
-  const [program, ...args] = [
-    ...host.lowPriority,
-    binary,
-    ...(variant.display === 'headless' ? ['--headless'] : ['--window-size=1920,1080']),
-    ...(variant.browser === 'chrome' ? CHROME_GPU_ARGS : [
-      `--fingerprint=${seed}`,
-      `--fingerprint-platform=${variant.platform}`,
-      '--fingerprint-brand=Chrome',
-    ]),
-    `--remote-debugging-port=${port}`,
-    `--user-data-dir=${profile}`,
-    '--no-first-run',
-  ];
+  disableSafeBrowsing(profile);
+  const [program, ...args] = [...lowPriority(), CHROME_BINARY, ...chromeArgs(variant.display === 'headed', port, profile)];
   let browserLog = '';
   const child = spawn(program, args, { env, stdio: ['ignore', 'ignore', 'pipe'] });
   // 'close' waits for every process holding stderr, including browser helpers.
@@ -178,8 +156,10 @@ async function launch(config, seed) {
   try {
     await waitForCdp(port, child, () => browserLog);
     const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    const { 'User-Agent': userAgent } = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
     return {
       browser,
+      contextOptions: variant.display === 'headless' ? { userAgent: headlessUserAgent(userAgent) } : {},
       close: async () => {
         await browser.close();
         await stop();
@@ -194,8 +174,8 @@ async function launch(config, seed) {
   }
 }
 
-async function measure(browser, { runId, config, configIndex, trial, target, settleMs, seed }) {
-  const context = await browser.newContext();
+async function measure(session, { runId, config, configIndex, trial, target, settleMs }) {
+  const context = await session.browser.newContext(session.contextOptions ?? {});
   try {
     const page = await context.newPage();
     let response;
@@ -239,7 +219,6 @@ async function measure(browser, { runId, config, configIndex, trial, target, set
       host: `${process.platform} ${process.arch}`,
       config,
       configIndex,
-      seed,
       target: target.name,
       targetUrl: target.url,
       trial,
@@ -284,7 +263,6 @@ function parseRunArgs(args) {
     settleMs: seconds(values['settle-seconds'] ?? '8', '--settle-seconds'),
     jsonl: resolve(values.jsonl),
     report: resolve(values.report),
-    seed: values.seed ?? '42424242',
   };
 }
 
@@ -380,20 +358,8 @@ function counts(values) {
   return [...result].map(([value, count]) => count === 1 ? value : `${value} ×${count}`).join(', ');
 }
 
-function hostConfig() {
-  if (process.platform === 'darwin' && process.arch === 'arm64') {
-    return {
-      binary: join(ROOT, 'fingerprint-chromium/Chromium.app/Contents/MacOS/Chromium'),
-      lowPriority: ['taskpolicy', '-c', 'utility'],
-    };
-  }
-  if (process.platform === 'linux' && process.arch === 'x64') {
-    return {
-      binary: join(ROOT, 'fingerprint-chromium/chrome'),
-      lowPriority: ['nice', '-n', '10'],
-    };
-  }
-  fail(`unsupported host ${process.platform} ${process.arch}`);
+function lowPriority() {
+  return process.platform === 'darwin' ? ['taskpolicy', '-c', 'utility'] : ['nice', '-n', '10'];
 }
 
 async function readFingerprint(page) {
@@ -441,24 +407,15 @@ function scoreStoredRecord(record) {
   return { ...record, challenge: [...new Set(challenge)], rendered: challenge.length === 0 };
 }
 
+// The controller's classifier, plus markers only a fixed target list makes
+// meaningful: any change of host, and server errors.
 function classifyChallenge({ status, targetUrl, finalUrl, title, body, navigationError, crashed }) {
-  const markers = [];
+  const markers = challengeMarkers({ url: finalUrl, status, title, body, html: true }, targetUrl);
   if (crashed) markers.push('page-crash');
   if (navigationError) markers.push('navigation-error');
-  if ([202, 403, 405, 406, 429].includes(status) || (status !== null && status >= 500)) markers.push(`status-${status}`);
-  if (isChallengeUrl(targetUrl, finalUrl)) markers.push('challenge-url');
-  if (CHALLENGE_TITLE.test(title)) markers.push('challenge-title');
-  if (CHALLENGE_BODY.test(body)) markers.push('challenge-body');
-  if (status !== null && status < 400 && title.trim() === '' && body.trim().length < 100) markers.push('empty-page');
+  if (status !== null && status >= 500) markers.push(`status-${status}`);
+  if (new URL(finalUrl).host !== new URL(targetUrl).host) markers.push('challenge-url');
   return [...new Set(markers)];
-}
-
-function isChallengeUrl(targetUrl, finalUrl) {
-  const target = new URL(targetUrl);
-  const final = new URL(finalUrl);
-  if (final.host !== target.host) return true;
-  const targetSegments = new Set(target.pathname.split('/').filter(Boolean).map((segment) => segment.toLowerCase()));
-  return final.pathname.split('/').filter(Boolean).some((segment) => CHALLENGE_PATH_SEGMENT.test(segment) && !targetSegments.has(segment.toLowerCase()));
 }
 
 function detectSystems(body, cookies) {
@@ -473,11 +430,10 @@ function detectSystems(body, cookies) {
 }
 
 function consistencyLeaks(config, trials) {
-  const platform = CONFIGS[config].platform === null ? trials[0].host.startsWith('darwin ') ? 'macos' : 'linux' : CONFIGS[config].platform;
+  const platform = trials[0].host.startsWith('darwin ') ? 'macos' : 'linux';
   const expected = {
     linux: { navigator: 'Linux x86_64', ua: /Linux/, hints: 'Linux' },
     macos: { navigator: 'MacIntel', ua: /Mac OS X/, hints: 'macOS' },
-    windows: { navigator: 'Win32', ua: /Windows NT/, hints: 'Windows' },
   }[platform];
   const leaks = new Set();
   for (const trial of trials) {
@@ -548,10 +504,10 @@ function delay(milliseconds) {
 
 function usage() {
   console.log(`Usage:
-  node tests/fingerprint-compare.mjs run --configs stock,macos,linux,windows --targets creepjs,browserleaks-javascript --trials-per-target 1 --spacing-seconds 0 [--settle-seconds 8] --jsonl results.jsonl --report report.md
+  node tests/fingerprint-compare.mjs run --configs chrome,firefox --targets creepjs,browserleaks-javascript --trials-per-target 1 --spacing-seconds 0 [--settle-seconds 8] --jsonl results.jsonl --report report.md
   node tests/fingerprint-compare.mjs report --jsonl results.jsonl --report report.md [--run-id ID]
 
-Configs: ${Object.keys(CONFIGS).join(', ')}. Headed configs need an X display: run under xvfb-run -a -s '-screen 0 1920x1080x24'. chrome and chrome-headed run Google Chrome on Linux.
+Configs: ${Object.keys(CONFIGS).join(', ')}. Headed configs run on Linux and need an X display: run under xvfb-run -a -s '-screen 0 1920x1080x24'.
 Targets may be built-in names or label=https://url.`);
   process.exit(command === 'help' ? 0 : 2);
 }
