@@ -33,7 +33,10 @@ PLIST_BODY
   # bootout + bootstrap, not kickstart: launchd pins the node binary's code
   # hash at registration, and kickstart after a Homebrew node upgrade fails
   # with EX_CONFIG until the job is re-registered.
+  # bootout returns before the job is gone, and bootstrapping it while it is
+  # still registered fails with "Bootstrap failed: 5".
   launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
+  while launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1; do sleep 0.2; done
   launchctl bootstrap "gui/$UID" "$PLIST"
   echo "installed $PLIST"
   exit 0
