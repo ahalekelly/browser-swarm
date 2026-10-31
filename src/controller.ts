@@ -4,7 +4,7 @@
 // harness and harnesses have nothing to share between subagents.
 import { spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer, get, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import { CALL_DEADLINE_MS, IDLE_MS, OUTPUT_ROOT, PORT, ROOT, SESSION_ROOT, TOKEN_FILE } from './config.ts';
@@ -17,6 +17,7 @@ const BOOT_POLL_MS = 500;
 const CONNECT_TIMEOUT_MS = 30_000;
 const SWEEP_MS = 15_000;
 const DEAD_RETENTION_MS = 3_600_000;
+const OUTPUT_RETENTION_MS = 86_400_000;
 const MAX_BODY_BYTES = 1024 * 1024;
 const LARGE_RESULT_LINES = 200;
 // browser_run_code_unsafe executes arbitrary JavaScript in the Playwright
@@ -480,6 +481,10 @@ function sweep(): void {
     if (now - state.idleSince <= IDLE_MS) continue;
     log(`${state.backend.displayName} has had no contexts for ${IDLE_MS / 1000}s, stopping it`);
     void state.stop();
+  }
+  for (const id of readdirSync(OUTPUT_ROOT)) {
+    const dir = join(OUTPUT_ROOT, id);
+    if (!contexts.has(id) && now - statSync(dir).mtimeMs > OUTPUT_RETENTION_MS) rmSync(dir, { recursive: true, force: true });
   }
 }
 

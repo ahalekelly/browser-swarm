@@ -251,6 +251,20 @@ test('artifacts stay readable after the context closes', async (t) => {
   assert.equal(fs.readFileSync(file, 'utf8'), 'not really a png');
 });
 
+test('a closed context\'s output dir is deleted a day after its last write', async (t) => {
+  const fixture = await createFixture(t);
+  const stale = path.join(fixture.output, 'c0000000000000001');
+  const fresh = path.join(fixture.output, 'c0000000000000002');
+  fs.mkdirSync(stale);
+  fs.mkdirSync(fresh);
+  const twoDaysAgo = Date.now() / 1000 - 2 * 86_400;
+  fs.utimesSync(stale, twoDaysAgo, twoDaysAgo);
+  await startController(t, fixture);
+
+  await eventually(() => !fs.existsSync(stale), 5000, 'stale output dir pruned');
+  assert.equal(fs.existsSync(fresh), true);
+});
+
 test('each context gets its own output dir as its workspace root', async (t) => {
   const fixture = await createFixture(t);
   const argsDir = path.join(fixture.dir, 'args');
