@@ -96,7 +96,7 @@ Response headers like `x-amzn-waf-action` are not readable from in-page `fetch()
 
 ## Headed browsers
 
-Every one of these systems is dramatically easier headed than headless: in the browsers-benchmark run, patchright headed renders on 10/10 targets while headless Chromium renders on no Akamai target at all.
+Headed helps Chrome, not every engine. On the five protected targets, Google Chrome headed in Xvfb rendered 75/100 trials against 20/100 headless, including Akamai and PerimeterX, which headless Chrome never passed. Headed Firefox rendered no more than headless Firefox and lost Akamai, which headless Firefox renders. See [the October 2026 comparison](reports/2026-10-31-chrome-firefox-headed.md).
 
 That doesn't rescue background agents on macOS, which has no Xvfb equivalent and no way to render a headed Chromium invisibly — Chrome for macOS has no Ozone/X11 backend, offscreen window positions are clamped back on screen, and hiding or minimizing the window makes screenshot capture time out. The only genuine invisible-headed route is a second user account left logged in via fast user switching, which costs a full GUI session's memory. Short of that, a headed app can be driven *behind* the current window via macOS SkyLight APIs, at the cost of GUI/vision-level driving — slow, token-heavy, and less deterministic than DOM and CDP.
 
