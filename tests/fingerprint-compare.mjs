@@ -184,13 +184,17 @@ async function measure(browser, { runId, config, configIndex, trial, target, set
       const request = candidate.request();
       if (request.isNavigationRequest() && request.frame() === page.mainFrame()) response = candidate;
     });
+    let crashed = false;
+    page.on('crash', () => {
+      crashed = true;
+    });
     let navigationError;
     try {
       await page.goto(target.url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     } catch (error) {
       navigationError = error.message;
     }
-    await page.waitForTimeout(settleMs);
+    await delay(settleMs);
     const settledResponse = response;
 
     const body = await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '');
@@ -207,6 +211,7 @@ async function measure(browser, { runId, config, configIndex, trial, target, set
       title,
       body: bodySnippet,
       navigationError,
+      crashed,
     });
     return {
       type: 'trial',
@@ -226,6 +231,7 @@ async function measure(browser, { runId, config, configIndex, trial, target, set
       bodySnippet,
       detectors: detectSystems(body, cookies),
       navigationError: navigationError ?? null,
+      crashed,
       requestHeaders: {
         'sec-ch-ua': requestHeaders['sec-ch-ua'] ?? null,
         'sec-ch-ua-platform': requestHeaders['sec-ch-ua-platform'] ?? null,
@@ -406,6 +412,7 @@ function scoreStoredRecord(record) {
     title: record.title,
     body: record.bodySnippet ?? '',
     navigationError: record.navigationError,
+    crashed: record.crashed,
   });
   if (record.bodySnippet === undefined) {
     for (const marker of record.challenge) {
@@ -415,8 +422,9 @@ function scoreStoredRecord(record) {
   return { ...record, challenge: [...new Set(challenge)], rendered: challenge.length === 0 };
 }
 
-function classifyChallenge({ status, targetUrl, finalUrl, title, body, navigationError }) {
+function classifyChallenge({ status, targetUrl, finalUrl, title, body, navigationError, crashed }) {
   const markers = [];
+  if (crashed) markers.push('page-crash');
   if (navigationError) markers.push('navigation-error');
   if ([202, 403, 405, 406, 429].includes(status) || (status !== null && status >= 500)) markers.push(`status-${status}`);
   if (isChallengeUrl(targetUrl, finalUrl)) markers.push('challenge-url');
@@ -454,6 +462,7 @@ function consistencyLeaks(config, trials) {
   }[platform];
   const leaks = new Set();
   for (const trial of trials) {
+    if (trial.crashed) continue;
     const fingerprint = trial.fingerprint;
     if (fingerprint.error) {
       leaks.add(`trial ${trial.trial}: fingerprint unreadable`);

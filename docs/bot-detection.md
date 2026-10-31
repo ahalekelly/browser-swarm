@@ -28,21 +28,20 @@ Where a browser isn't strictly required, the more reliable path is not to drive 
 
 Its main fork, cloakbrowser, scores the same overall headless on the same targets, differing only on which individual sites render; the upstream is slightly lighter. The persistent fingerprint seed derives GPU vendor and renderer values. Current builds removed the manual GPU flags.
 
-[`tests/fingerprint-compare.mjs`](../tests/fingerprint-compare.mjs) measures ordered platform and display configurations with one seed. `stock` runs Playwright's bundled Chromium without fingerprint flags; install that control with `node_modules/.bin/playwright install chromium`. `linux-headed` runs the Linux fingerprint in a 1920×1080 Xvfb display and requires `xvfb-run` and `Xvfb` on `PATH`. Each trial gets a fresh context and appends its result to JSONL before the next delay. The completed run renders a Markdown report:
+[`tests/fingerprint-compare.mjs`](../tests/fingerprint-compare.mjs) compares browser configurations side by side with one fingerprint seed. All configs stay open for the whole run; each round visits every target once per config, rotating config order, so network conditions and IP reputation hit every config alike. `macos`, `windows`, and `linux` run fingerprint-chromium headless with that platform; `linux-headed` runs the Linux fingerprint in a 1920×1080 Xvfb display. `chrome` and `chrome-headed` run Google Chrome stable (`/usr/bin/google-chrome-stable`, Linux only) headless or in Xvfb, on the host GPU through Vulkan. `stock` runs Playwright's bundled Chromium without fingerprint flags; install it with `node_modules/.bin/playwright install chromium`. Headed configs need `xvfb-run` and `Xvfb` on `PATH`. Each trial gets a fresh context and appends its result to JSONL before the next delay. The completed run renders a Markdown report:
 
 ```sh
 node tests/fingerprint-compare.mjs run \
-  --configs macos,windows \
+  --configs chrome-headed,chrome,macos \
   --targets cloudflare-challenge,datadome-leboncoin,datadome-stacked-hermes,perimeterx-therealreal,akamai-homedepot \
   --trials-per-target 20 \
   --spacing-seconds 15 \
-  --cooldown-seconds 3600 \
   --settle-seconds 8 \
   --jsonl results.jsonl \
-  --report docs/reports/fingerprint-platform.md
+  --report docs/reports/comparison.md
 ```
 
-Targets may be built-in names or `label=https://url`. Built-in protected targets: `cloudflare-challenge` (managed challenge), `akamai-homedepot`, `datadome-leboncoin` (DataDome alone; renders a few times then 403s the IP+fingerprint pair), `datadome-stacked-hermes` (DataDome behind Cloudflare), and `perimeterx-therealreal`. `amazon` and `google` do not challenge stock headless at low rates and only serve as render checks. The settle window defaults to eight seconds. Recover a report from an interrupted run with `node tests/fingerprint-compare.mjs report --jsonl results.jsonl --report report.md`. Reverse config order on the next day. Choose the platform with the most rendered trials on protected sites and no consistency leaks; ties go to `macos` so both hosts expose one identity.
+Targets may be built-in names or `label=https://url`. Built-in protected targets: `cloudflare-challenge` (managed challenge), `akamai-homedepot`, `datadome-leboncoin` (DataDome alone; renders a few times then 403s the IP+fingerprint pair), `datadome-stacked-hermes` (DataDome behind Cloudflare), and `perimeterx-therealreal`. `amazon` and `google` do not challenge stock headless at low rates and only serve as render checks. The settle window defaults to eight seconds. A renderer crash scores as a `page-crash` failure. Recover a report from an interrupted run with `node tests/fingerprint-compare.mjs report --jsonl results.jsonl --report report.md`. Consistency leaks flag a platform mismatch between UA, `navigator.platform`, and client hints, a `HeadlessChrome` UA, `navigator.webdriver`, and a missing or software WebGL renderer.
 
 Two configuration notes that apply to any patched Chromium driven by Playwright:
 
