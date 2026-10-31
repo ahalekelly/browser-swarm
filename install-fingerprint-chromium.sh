@@ -2,7 +2,6 @@
 # Install the pinned fingerprint-chromium build used by the Chromium backend.
 set -euo pipefail
 
-VERSION=148.0.7778.215
 DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="$DIR/fingerprint-chromium"
 
@@ -40,13 +39,16 @@ EOF
 
 case "$(uname -sm)" in
   "Darwin arm64")
+    # Upstream ships macOS builds less often than Linux ones.
+    VERSION=148.0.7778.215
     URL="https://github.com/adryfish/fingerprint-chromium/releases/download/$VERSION/ungoogled-chromium_${VERSION}-1.1_macos.dmg"
     SHA256=b72f091e2e1a7583eed389c4b8e3534ed355e568af8c8bbf8fc30a25e23ca679
     BINARY="$INSTALL_DIR/Chromium.app/Contents/MacOS/Chromium"
     ;;
   "Linux x86_64")
+    VERSION=150.0.7871.186
     URL="https://github.com/adryfish/fingerprint-chromium/releases/download/$VERSION/ungoogled-chromium-${VERSION}-1-x86_64_linux.tar.xz"
-    SHA256=70d239830332e5820aa34dfcb284161cac0429eee25da642830afe04bda717f4
+    SHA256=48eff860053efd9ad498d51370f0a1f59f983df39c02a72ad2a8682cdead4055
     BINARY="$INSTALL_DIR/chrome"
     install_linux_apparmor_profile
     ;;
