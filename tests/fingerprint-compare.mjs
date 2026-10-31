@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Run platform configs in ordered blocks. Targets are interleaved within each
-// block, and every completed trial is appended before the next delay.
+// Run browser configs side by side. Every round visits each target once per
+// config, rotating config order, and every completed trial is appended before
+// the next delay.
 import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -11,12 +12,18 @@ import { chromium } from 'playwright-core';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIGS = {
-  stock: { platform: null, display: 'headless' },
-  linux: { platform: 'linux', display: 'headless' },
-  'linux-headed': { platform: 'linux', display: 'xvfb' },
-  macos: { platform: 'macos', display: 'headless' },
-  windows: { platform: 'windows', display: 'headless' },
+  stock: { browser: 'playwright', platform: null, display: 'headless' },
+  linux: { browser: 'fingerprint', platform: 'linux', display: 'headless' },
+  'linux-headed': { browser: 'fingerprint', platform: 'linux', display: 'xvfb' },
+  macos: { browser: 'fingerprint', platform: 'macos', display: 'headless' },
+  windows: { browser: 'fingerprint', platform: 'windows', display: 'headless' },
+  chrome: { browser: 'chrome', platform: 'linux', display: 'headless' },
+  'chrome-headed': { browser: 'chrome', platform: 'linux', display: 'xvfb' },
 };
+const CHROME_BINARY = '/usr/bin/google-chrome-stable';
+// Xvfb has no GPU, so Chrome's default GL backend leaves WebGL unavailable.
+// Vulkan reaches the host GPU without going through the X server.
+const CHROME_GPU_ARGS = ['--use-angle=vulkan', '--enable-features=Vulkan'];
 const TARGETS = {
   creepjs: 'https://abrahamjuliot.github.io/creepjs/',
   'browserleaks-webgl': 'https://browserleaks.com/webgl',
@@ -68,38 +75,38 @@ async function run(options) {
   mkdirSync(dirname(options.jsonl), { recursive: true });
   const runId = `${new Date().toISOString()}-${process.pid}`;
 
-  for (let configIndex = 0; configIndex < options.configs.length; configIndex += 1) {
-    const config = options.configs[configIndex];
-    const session = await launch(config, options.seed);
-    try {
-      const schedule = [];
-      for (let trial = 1; trial <= options.trialsPerTarget; trial += 1) {
-        for (const target of options.targets) schedule.push({ trial, target });
+  const { configs } = options;
+  const schedule = [];
+  for (let trial = 1; trial <= options.trialsPerTarget; trial += 1) {
+    for (const target of options.targets) {
+      for (let offset = 0; offset < configs.length; offset += 1) {
+        const configIndex = (trial + offset) % configs.length;
+        schedule.push({ trial, target, configIndex });
       }
-
-      for (let scheduleIndex = 0; scheduleIndex < schedule.length; scheduleIndex += 1) {
-        const { trial, target } = schedule[scheduleIndex];
-        const record = await measure(session.browser, {
-          runId,
-          config,
-          configIndex: configIndex + 1,
-          trial,
-          target,
-          settleMs: options.settleMs,
-          seed: options.seed,
-        });
-        appendFileSync(options.jsonl, `${JSON.stringify(record)}\n`);
-        console.log(`${config} ${target.name} ${trial}/${options.trialsPerTarget}: ${record.rendered ? 'rendered' : record.challenge.join(', ')}`);
-        if (scheduleIndex < schedule.length - 1) await delay(options.spacingMs);
-      }
-    } finally {
-      await session.close();
     }
+  }
 
-    if (configIndex < options.configs.length - 1 && options.cooldownMs > 0) {
-      console.log(`cooldown: ${options.cooldownMs / 1000}s`);
-      await delay(options.cooldownMs);
+  const sessions = [];
+  try {
+    for (const config of configs) sessions.push(await launch(config, options.seed));
+    for (let scheduleIndex = 0; scheduleIndex < schedule.length; scheduleIndex += 1) {
+      const { trial, target, configIndex } = schedule[scheduleIndex];
+      const config = configs[configIndex];
+      const record = await measure(sessions[configIndex].browser, {
+        runId,
+        config,
+        configIndex: configIndex + 1,
+        trial,
+        target,
+        settleMs: options.settleMs,
+        seed: options.seed,
+      });
+      appendFileSync(options.jsonl, `${JSON.stringify(record)}\n`);
+      console.log(`${config} ${target.name} ${trial}/${options.trialsPerTarget}: ${record.rendered ? 'rendered' : record.challenge.join(', ')}`);
+      if (scheduleIndex < schedule.length - 1) await delay(options.spacingMs);
     }
+  } finally {
+    for (const session of sessions) await session.close();
   }
 
   renderReport({ jsonl: options.jsonl, report: options.report, runId });
@@ -115,16 +122,19 @@ async function launch(config, seed) {
   }
 
   const host = hostConfig();
-  if (variant.display === 'xvfb' && process.platform !== 'linux') fail('linux-headed is only available on Linux');
-  if (!existsSync(host.binary)) fail(`fingerprint-chromium is not installed at ${host.binary}`);
+  if ((variant.display === 'xvfb' || variant.browser === 'chrome') && process.platform !== 'linux') fail(`${config} is only available on Linux`);
+  const binary = variant.browser === 'chrome' ? CHROME_BINARY : host.binary;
+  if (!existsSync(binary)) fail(`${variant.browser === 'chrome' ? 'Google Chrome' : 'fingerprint-chromium'} is not installed at ${binary}`);
   const port = await freePort();
   const profile = mkdtempSync(join(tmpdir(), 'fingerprint-compare-'));
   const browserArgs = [
-    host.binary,
+    binary,
     ...(variant.display === 'headless' ? ['--headless'] : ['--window-size=1920,1080']),
-    `--fingerprint=${seed}`,
-    `--fingerprint-platform=${variant.platform}`,
-    '--fingerprint-brand=Chrome',
+    ...(variant.browser === 'chrome' ? CHROME_GPU_ARGS : [
+      `--fingerprint=${seed}`,
+      `--fingerprint-platform=${variant.platform}`,
+      '--fingerprint-brand=Chrome',
+    ]),
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${profile}`,
     '--no-first-run',
@@ -133,7 +143,16 @@ async function launch(config, seed) {
     ? ['xvfb-run', '--auto-servernum', '--server-args=-screen 0 1920x1080x24', ...host.lowPriority, ...browserArgs]
     : [...host.lowPriority, ...browserArgs];
   let browserLog = '';
-  const child = spawn(program, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+  // xvfb-run does not forward signals to the browser, so signal the whole group.
+  // 'close' waits for every process holding stderr, including the browser.
+  const child = spawn(program, args, { detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
+  const closed = new Promise((resolveClose) => child.once('close', resolveClose));
+  const stop = async () => {
+    process.kill(-child.pid, 'SIGTERM');
+    if (await Promise.race([closed.then(() => true), delay(10_000).then(() => false)])) return;
+    process.kill(-child.pid, 'SIGKILL');
+    await closed;
+  };
   child.stderr.on('data', (chunk) => {
     browserLog = `${browserLog}${chunk}`.slice(-20_000);
   });
@@ -143,14 +162,15 @@ async function launch(config, seed) {
     return {
       browser,
       close: async () => {
-        await browser.close().catch(() => {});
-        if (child.exitCode === null) child.kill('SIGTERM');
-        rmSync(profile, { recursive: true, force: true });
+        await browser.close();
+        await stop();
+        // Helper processes can still be flushing the profile after the browser exits.
+        rmSync(profile, { recursive: true, force: true, maxRetries: 10 });
       },
     };
   } catch (error) {
-    if (child.exitCode === null) child.kill('SIGTERM');
-    rmSync(profile, { recursive: true, force: true });
+    if (child.exitCode === null) await stop();
+    rmSync(profile, { recursive: true, force: true, maxRetries: 10 });
     throw error;
   }
 }
@@ -221,7 +241,7 @@ async function measure(browser, { runId, config, configIndex, trial, target, set
 
 function parseRunArgs(args) {
   const values = parsePairs(args);
-  for (const required of ['configs', 'targets', 'trials-per-target', 'spacing-seconds', 'cooldown-seconds', 'jsonl', 'report']) {
+  for (const required of ['configs', 'targets', 'trials-per-target', 'spacing-seconds', 'jsonl', 'report']) {
     if (values[required] === undefined) fail(`--${required} is required`);
   }
   const configs = csv(values.configs);
@@ -236,7 +256,6 @@ function parseRunArgs(args) {
     targets,
     trialsPerTarget: positiveInteger(values['trials-per-target'], '--trials-per-target'),
     spacingMs: seconds(values['spacing-seconds'], '--spacing-seconds'),
-    cooldownMs: seconds(values['cooldown-seconds'], '--cooldown-seconds'),
     settleMs: seconds(values['settle-seconds'] ?? '8', '--settle-seconds'),
     jsonl: resolve(values.jsonl),
     report: resolve(values.report),
@@ -286,7 +305,7 @@ function renderReport({ jsonl, report, runId }) {
   if (records.length === 0) fail(`no trial records found in ${jsonl}${runId ? ` for run ${runId}` : ''}`);
 
   const lines = [
-    `# Fingerprint platform comparison — ${new Date().toISOString().replace('T', ' ').slice(0, 19)} UTC`,
+    `# Bot-detection comparison — ${new Date().toISOString().replace('T', ' ').slice(0, 19)} UTC`,
     '',
     `Source: \`${basename(jsonl)}\` (${records.length} trials${runId ? `, run \`${runId}\`` : ''}).`,
     '',
@@ -360,6 +379,7 @@ async function readFingerprint(page) {
     const userAgentData = navigator.userAgentData;
     return {
       userAgent: navigator.userAgent,
+      webdriver: navigator.webdriver,
       platform: navigator.platform,
       languages: navigator.languages,
       locale: Intl.DateTimeFormat().resolvedOptions().locale,
@@ -440,7 +460,8 @@ function consistencyLeaks(config, trials) {
       continue;
     }
     if (fingerprint.platform !== expected.navigator) leaks.add(`navigator.platform=${fingerprint.platform}`);
-    if (!expected.ua.test(fingerprint.userAgent)) leaks.add(`UA=${fingerprint.userAgent}`);
+    if (!expected.ua.test(fingerprint.userAgent) || /HeadlessChrome/.test(fingerprint.userAgent)) leaks.add(`UA=${fingerprint.userAgent}`);
+    if (fingerprint.webdriver) leaks.add('navigator.webdriver=true');
     if (fingerprint.clientHints?.platform !== expected.hints) leaks.add(`client hints platform=${fingerprint.clientHints?.platform}`);
     const headerPlatform = trial.requestHeaders['sec-ch-ua-platform'];
     if (headerPlatform && headerPlatform.replaceAll('"', '') !== expected.hints) leaks.add(`sec-ch-ua-platform=${headerPlatform}`);
@@ -458,11 +479,11 @@ function consistencyLeaks(config, trials) {
 
 async function waitForCdp(port, process, log) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (process.exitCode !== null) fail(`Chromium exited ${process.exitCode} while starting:\n${log()}`);
+    if (process.exitCode !== null) throw new Error(`Chromium exited ${process.exitCode} while starting:\n${log()}`);
     if (await fetch(`http://127.0.0.1:${port}/json/version`).then((response) => response.ok).catch(() => false)) return;
     await delay(200);
   }
-  fail(`Chromium did not open CDP port ${port}:\n${log()}`);
+  throw new Error(`Chromium did not open CDP port ${port}:\n${log()}`);
 }
 
 function freePort() {
@@ -499,10 +520,10 @@ function delay(milliseconds) {
 
 function usage() {
   console.log(`Usage:
-  node tests/fingerprint-compare.mjs run --configs stock,macos,linux,windows --targets creepjs,browserleaks-javascript --trials-per-target 1 --spacing-seconds 0 --cooldown-seconds 0 [--settle-seconds 8] --jsonl results.jsonl --report report.md
+  node tests/fingerprint-compare.mjs run --configs stock,macos,linux,windows --targets creepjs,browserleaks-javascript --trials-per-target 1 --spacing-seconds 0 [--settle-seconds 8] --jsonl results.jsonl --report report.md
   node tests/fingerprint-compare.mjs report --jsonl results.jsonl --report report.md [--run-id ID]
 
-Configs: ${Object.keys(CONFIGS).join(', ')}. linux-headed uses Xvfb and is only available on Linux.
+Configs: ${Object.keys(CONFIGS).join(', ')}. linux-headed and chrome-headed use Xvfb; they and chrome are only available on Linux.
 Targets may be built-in names or label=https://url.`);
   process.exit(command === 'help' ? 0 : 2);
 }
