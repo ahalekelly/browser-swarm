@@ -8,7 +8,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync
 import { createServer, get, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import { getDomain } from 'tldts';
-import { BOT_COOKIE, challengeMarkers, type PageState } from './challenge.ts';
+import { BOT_COOKIE, CHALLENGE_HOST, challengeMarkers, type PageState } from './challenge.ts';
 import { CHROME_BINARY, chromeArgs, disableSafeBrowsing, HEADED_SCREEN, headlessUserAgent, VIEWPORT } from './chrome.ts';
 import { CALL_DEADLINE_MS, IDLE_MS, OUTPUT_ROOT, PORT, ROOT, SESSION_ROOT, TOKEN_FILE } from './config.ts';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -53,8 +53,8 @@ const PAGE_PROBE = `() => ({
   title: document.title,
   body: (document.body?.innerText ?? '').slice(0, 500),
   contentType: document.contentType,
-  markup: document.documentElement?.outerHTML.slice(0, 2000) ?? '',
 })`;
+const MARKUP_PROBE = `() => document.documentElement?.outerHTML.slice(0, 2000) ?? ''`;
 // Agents report blocks the classifier missed; the latest reports are kept
 // as samples for improving it.
 const REPORTS_FILE = join(ROOT, 'blocked-reports.jsonl');
@@ -98,6 +98,8 @@ type Context = {
   outputDir: string;
   session?: string;
   client: Client;
+  // The URL of the context's latest navigation.
+  navigated?: string;
   createdAt: number;
   lastActivity: number;
   inFlight: number;
@@ -120,6 +122,8 @@ const browsers = new Map<BrowserName, BrowserState>();
 const contexts = new Map<string, Context>();
 // Registrable domain to the epoch ms its headed routing expires.
 const headedSites = new Map<string, number>();
+// The latest agent reports, as JSON lines.
+const reports: string[] = [];
 let token = '';
 let shuttingDown = false;
 
@@ -502,6 +506,7 @@ async function callTool(id: string, name: string, args: Record<string, unknown>)
       return await invoke(context, name, args);
     }
     const { url } = args;
+    context.navigated = url;
     if (needsHeaded(url)) await moveContext(context, 'chrome-headed');
     const first = await invoke(context, name, args);
     if (context.browser !== 'chrome' || first.isError || !await blocked(context, url)) return first;
@@ -544,18 +549,28 @@ async function invoke(context: Context, name: string, args: Record<string, unkno
 async function reportBlocked(context: Context): Promise<ToolResult> {
   const page = await probePage(context);
   if (page === undefined) return toolText('Could not read the current page; navigate to it again and retry.', true);
-  const kept = existsSync(REPORTS_FILE) ? readFileSync(REPORTS_FILE, 'utf8').split('\n').filter(Boolean) : [];
-  kept.push(JSON.stringify({ at: new Date().toISOString(), browser: context.browser, ...page }));
-  writeFileSync(REPORTS_FILE, `${kept.slice(-REPORTS_KEPT).join('\n')}\n`);
+  const markup = await invoke(context, 'browser_evaluate', { function: MARKUP_PROBE });
+  reports.push(JSON.stringify({ at: new Date().toISOString(), browser: context.browser, ...page, markup: JSON.parse(resultValue(markup) ?? '""') }));
+  reports.splice(0, reports.length - REPORTS_KEPT);
+  writeFileSync(REPORTS_FILE, `${reports.join('\n')}\n`);
   log(`${context.id} reported ${page.url} as blocked`);
-  if (!PLATFORM.headed || context.browser !== 'chrome') {
-    return toolText('Recorded. This machine has no other browser to retry the page in, so treat the site as blocked.', false);
-  }
+  // A redirect to a bot vendor's own host leaves the site's URL behind.
+  const url = CHALLENGE_HOST.test(new URL(page.url).hostname) && context.navigated !== undefined ? context.navigated : page.url;
+  const domain = getDomain(url);
+  if (!PLATFORM.headed) return toolText('Recorded. This machine has no headed browser to retry the page in, so treat the site as blocked.', false);
+  if (context.browser === 'firefox') return toolText('Recorded. Firefox contexts stay in Firefox; a browser-swarm Chrome context may get through.', false);
+  if (context.browser === 'chrome-headed') return toolText('Recorded. This page is already in headed Chrome, so treat the site as blocked.', false);
+  if (domain === null) return toolText('Recorded. This address is not a public site, so it is not retried elsewhere.', false);
   await delay(RETRY_PAUSE_MS);
   await moveContext(context, 'chrome-headed');
-  const domain = getDomain(page.url);
-  if (domain !== null) learnHeaded(domain);
-  return await invoke(context, 'browser_navigate', { url: page.url });
+  learnHeaded(domain);
+  return await invoke(context, 'browser_navigate', { url });
+}
+
+// The JSON value a browser_evaluate result reports.
+function resultValue(result: ToolResult): string | undefined {
+  const text = (result.content as { text?: string }[]).map((item) => item.text ?? '').join('\n');
+  return text.match(/^### Result\n([\s\S]*?)\n### /m)?.[1];
 }
 
 function toolText(text: string, isError: boolean): ToolResult {
@@ -585,9 +600,9 @@ async function probePage(context: Context): Promise<PageState | undefined> {
     undefined,
     { timeout: PROBE_DEADLINE_MS },
   ).catch(() => undefined);
+  if (context.dead) throw new ApiError(410, context.dead.reason);
   if (result === undefined || result.isError) return undefined;
-  const text = (result.content as { text?: string }[]).map((item) => item.text ?? '').join('\n');
-  const json = text.match(/^### Result\n([\s\S]*?)\n### /m)?.[1];
+  const json = resultValue(result);
   return json === undefined ? undefined : JSON.parse(json);
 }
 
@@ -709,7 +724,7 @@ function snapshot(): Record<string, unknown> {
       lastCrash: state.lastCrash ?? null,
     })),
     contexts: [...contexts.values()].filter((context) => !context.dead).length,
-    blockedReports: existsSync(REPORTS_FILE) ? readFileSync(REPORTS_FILE, 'utf8').split('\n').filter(Boolean).length : 0,
+    blockedReports: reports.length,
     headedSites: [...headedSites]
       .filter(([, until]) => until > Date.now())
       .map(([domain, until]) => ({ domain, until: new Date(until).toISOString() })),
@@ -871,6 +886,7 @@ function start(): void {
   mkdirSync(SESSION_ROOT, { recursive: true, mode: 0o700 });
   chmodSync(SESSION_ROOT, 0o700);
   loadHeadedSites();
+  if (existsSync(REPORTS_FILE)) reports.push(...readFileSync(REPORTS_FILE, 'utf8').split('\n').filter(Boolean));
   // A fresh token per controller start invalidates every stale handle at once.
   token = randomBytes(24).toString('hex');
 

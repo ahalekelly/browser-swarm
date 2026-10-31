@@ -416,7 +416,7 @@ function scoreStoredRecord(record) {
 // The controller's classifier, plus markers only a fixed target list makes
 // meaningful: any change of host, and server errors.
 function classifyChallenge({ status, targetUrl, finalUrl, title, body, contentType, navigationError, crashed }) {
-  const markers = challengeMarkers({ url: finalUrl, status, title, body, contentType, markup: '' }, targetUrl);
+  const markers = challengeMarkers({ url: finalUrl, status, title, body, contentType }, targetUrl);
   if (crashed) markers.push('page-crash');
   if (navigationError) markers.push('navigation-error');
   if (status !== null && status >= 500) markers.push(`status-${status}`);

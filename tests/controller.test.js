@@ -445,7 +445,7 @@ test('an agent report of a blocked page moves the context to headed Chrome and k
   const firefox = (await controller.call('POST', '/contexts', { backend: 'firefox' })).body.id;
   await controller.call('POST', `/contexts/${firefox}/call`, { name: 'browser_navigate', arguments: { url: 'https://other.example/' } });
   const recorded = await controller.call('POST', `/contexts/${firefox}/call`, { name: 'browser_report_blocked', arguments: {} });
-  assert.match(recorded.body.text, /no other browser/);
+  assert.match(recorded.body.text, /Firefox contexts stay in Firefox/);
 
   const samples = fs.readFileSync(path.join(fixture.dir, 'blocked-reports.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
   assert.deepEqual(samples.map((sample) => [sample.browser, sample.url, sample.markup]), [

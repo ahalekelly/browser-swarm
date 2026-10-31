@@ -6,10 +6,10 @@ const CHALLENGE_STATUS = new Set([202, 403, 405, 406, 429]);
 // Quiet blocks serve a normal-looking 200 and are recognized by their text:
 // Amazon's continue-shopping interstitial and robot check, and CNN's
 // plain-text page that is only "Unknown Error".
-const CHALLENGE_BODY = /^\s*unknown error\s*$|click the button below to continue shopping|not a robot|captcha-delivery|just a moment|cf-chl-|px-captcha|window\.gokuProps|challenge-container|Incapsula incident ID|the requested url was rejected|Radware Captcha Page|botdetect\.min\.js|sucuri website firewall/i;
+const CHALLENGE_BODY = /^\s*unknown error\s*$|click the button below to continue shopping|make sure you're not a robot|captcha-delivery|just a moment|cf-chl-|px-captcha|window\.gokuProps|challenge-container|Incapsula incident ID|the requested url was rejected|Radware Captcha Page|botdetect\.min\.js|sucuri website firewall/i;
 const CHALLENGE_TITLE = /^just a moment|access denied|error page|attention required|pardon our interruption|are you a human|verify you are human/i;
 const CHALLENGE_PATH_SEGMENT = /captcha|challenge/i;
-const CHALLENGE_HOST = /(^|\.)(perfdrive\.com|queue-it\.net|captcha-delivery\.com)$/i;
+export const CHALLENGE_HOST = /(^|\.)(perfdrive\.com|queue-it\.net|captcha-delivery\.com)$/i;
 
 // Bot-detection vendors' session cookies, each bound to the browser that
 // earned it.
@@ -22,8 +22,6 @@ export type PageState = {
   // The page's first 500 characters of visible text.
   body: string;
   contentType: string;
-  // The first 2000 characters of the page's HTML.
-  markup: string;
 };
 
 // `requestedUrl` is what the visitor asked for; path segments it already
