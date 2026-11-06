@@ -127,7 +127,9 @@ export function installFakeFirefox(dir) {
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:net';
 export const firefox = {
-  launchServer: ({ host, port, wsPath }) => new Promise((resolve) => {
+  launchServer: ({ host, port, wsPath, timeout }) => new Promise((resolve, reject) => {
+    // Stands in for a Firefox that never finishes starting; Playwright gives up after the timeout.
+    if (process.env.FAKE_FIREFOX_HANG) return setTimeout(() => reject(new Error(\`firefox.launchServer: Timeout \${timeout}ms exceeded.\`)), timeout);
     const events = new EventEmitter();
     const sockets = new Set();
     const listener = createServer((socket) => {

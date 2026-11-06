@@ -278,6 +278,7 @@ async function launchFirefox(state: BrowserState): Promise<void> {
     host: '127.0.0.1',
     port: backend.port,
     wsPath: '/browser-swarm',
+    timeout: BOOT_TIMEOUT_MS,
   });
   if (server.wsEndpoint() !== backend.endpoint) {
     await server.close();

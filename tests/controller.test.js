@@ -398,6 +398,19 @@ test('the Firefox backend runs its own browser and contexts', async (t) => {
   assert.equal((await controller.call('DELETE', `/contexts/${opened.body.id}`)).body.session, 'shop');
 });
 
+test('a Firefox launch that never finishes fails after the boot budget, and the next open relaunches it', async (t) => {
+  const fixture = await createFixture(t, { BOOT_TIMEOUT_MS: 1000 });
+  installFakeFirefox(fixture.dir);
+  const controller = await startController(t, fixture, { FAKE_FIREFOX_HANG: '1' });
+
+  const opened = await controller.call('POST', '/contexts', { backend: 'firefox' });
+  assert.equal(opened.status, 500);
+  assert.match(opened.body.error, /Timeout 1000ms exceeded/);
+  assert.equal((await controller.call('GET', '/status')).body.browsers[0].running, false);
+  assert.equal((await controller.call('POST', '/contexts', { backend: 'firefox' })).status, 500);
+  assert.equal(controller.log().match(/starting Firefox/g).length, 2);
+});
+
 // Hosts named blocked.* challenge the fake headless Chrome and render on the
 // fake headed one; see tests/fixtures/fake-mcp.js.
 const linuxOnly = { skip: process.platform !== 'linux' && 'headed Chrome runs only on Linux' };
