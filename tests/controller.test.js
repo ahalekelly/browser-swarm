@@ -243,10 +243,11 @@ test('a large result is previewed and saved in full', async (t) => {
 test('artifacts stay readable after the context closes', async (t) => {
   const fixture = await createFixture(t);
   const controller = await startController(t, fixture);
-  const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body;
+  const { id, outputDir } = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body;
 
   const shot = await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_take_screenshot', arguments: {} });
-  const file = shot.body.text.replace('Saved screenshot to ', '');
+  const file = shot.body.text.match(/]\(([^)]+)\)/)[1];
+  assert.equal(file, path.join(outputDir, 'page.png'));
   await controller.call('DELETE', `/contexts/${id}`);
   assert.equal(fs.readFileSync(file, 'utf8'), 'not really a png');
 });

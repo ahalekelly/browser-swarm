@@ -30,10 +30,10 @@ export async function serveMcp(backend: 'chrome' | 'firefox'): Promise<void> {
   }
   console.error(`BrowserSwarm context ${id}, output ${outputDir}`);
   // Server instructions are the one channel that reaches the agent without a
-  // tool call, and the output dir is what every artifact link is relative to.
+  // tool call.
   const server = new Server({ name: 'browser-swarm', version }, {
     capabilities: { tools: {} },
-    instructions: `Downloads, screenshots and scratch files land in ${outputDir}. A result links an artifact relative to that directory, so resolve the link against it before reading the file.`,
+    instructions: `Downloads, screenshots and scratch files land in ${outputDir}.`,
   });
 
   let closed = false;

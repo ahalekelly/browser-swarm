@@ -520,7 +520,10 @@ async function callTool(id: string, name: string, args: Record<string, unknown>)
   const content = Array.isArray(result.content) ? result.content : [];
   const text = content
     .map((item: { type: string; text?: string }) => (item.type === 'text' ? item.text ?? '' : `[${item.type} content]`))
-    .join('\n');
+    .join('\n')
+    // Playwright MCP links artifacts relative to its cwd, the output dir, which
+    // callers can't see; absolute links let them read the file directly.
+    .replaceAll('](./', `](${context.outputDir}/`);
   const lines = text.split('\n').length;
   if (lines <= LARGE_RESULT_LINES) return { text, isError: result.isError === true, outputDir: context.outputDir };
   const savedPath = join(context.outputDir, `result-${Date.now().toString(36)}.txt`);

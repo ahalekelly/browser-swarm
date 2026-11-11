@@ -77,9 +77,8 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
       return send(message.id, { content: [{ type: 'text', text: `### Open tabs\n- 0: (current) [Fake page] (${url})` }] });
     }
     if (name === 'browser_take_screenshot') {
-      const file = path.join(outputDir, 'page.png');
-      fs.writeFileSync(file, 'not really a png');
-      return send(message.id, { content: [{ type: 'text', text: `Saved screenshot to ${file}` }] });
+      fs.writeFileSync(path.join(outputDir, 'page.png'), 'not really a png');
+      return send(message.id, { content: [{ type: 'text', text: `### Result\n- [Screenshot of viewport](./page.png)\n` }] });
     }
     if (name === 'browser_storage_state' && TOOLS.includes(STORAGE_TOOLS[1])) {
       if (process.env.FAKE_SAVE_HANG) return;

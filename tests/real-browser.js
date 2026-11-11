@@ -44,17 +44,13 @@ export function realBrowserTests(backend) {
     assert.match(cookies[1], /visited=second/);
     assert.doesNotMatch(cookies[1], /visited=first/);
 
-    // Playwright MCP links artifacts relative to the workspace root, which the
-    // controller sets to the context's output dir, so a link resolves there
-    // and nowhere near the calling agent's project.
     const shots = await Promise.all([
       first.call('browser_take_screenshot', {}),
       second.call('browser_take_screenshot', {}),
     ]);
     const files = [first, second].map((entry, index) => {
-      const link = shots[index].match(/]\((\.\/[^)]+\.(?:png|jpeg|jpg))\)/)[1];
-      const file = path.resolve(entry.outputDir, link);
-      assert.equal(path.dirname(file), entry.outputDir, `screenshot ${link} escaped its context's output dir`);
+      const file = shots[index].match(/]\(([^)]+\.(?:png|jpeg|jpg))\)/)[1];
+      assert.equal(path.dirname(file), entry.outputDir, `screenshot ${file} is not in its context's output dir`);
       assert.ok(fs.statSync(file).size > 0);
       return file;
     });
