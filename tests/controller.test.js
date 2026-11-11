@@ -512,6 +512,20 @@ test('the API refuses anything but an authorized, well-formed request', async (t
   assert.deepEqual((await controller.call('GET', '/contexts')).body.contexts, []);
 });
 
+test('the controller exits for new code once no context is open', async (t) => {
+  const fixture = await createFixture(t);
+  const controller = await startController(t, fixture);
+  const { id } = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body;
+  const later = new Date(Date.now() + 1000);
+  fs.utimesSync(path.join(fixture.dir, 'src/api.ts'), later, later);
+
+  await delay(500);
+  assert.equal(controller.child.exitCode, null, 'restarted under an open context');
+  await controller.call('DELETE', `/contexts/${id}`);
+  await eventually(() => controller.child.exitCode === 0, 5000, 'controller exit');
+  assert.match(controller.log(), /code changed on disk/);
+});
+
 test('SIGTERM closes every context and stops the browser', async (t) => {
   const fixture = await createFixture(t);
   const controller = await startController(t, fixture);

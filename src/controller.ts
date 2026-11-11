@@ -126,6 +126,7 @@ const headedSites = new Map<string, number>();
 const reports: string[] = [];
 let token = '';
 let shuttingDown = false;
+const startedCode = codeVersion();
 
 function hostPlatform(): { lowPriority: [string, ...string[]]; headed: boolean } {
   if (process.platform === 'darwin' && process.arch === 'arm64') return { lowPriority: ['taskpolicy', '-c', 'utility'], headed: false };
@@ -708,6 +709,13 @@ function sweep(): void {
     log(`${state.backend.displayName} has had no contexts for ${IDLE_MS / 1000}s, stopping it`);
     void state.stop();
   }
+  // Sync updates the checkout under a running controller. Exiting once idle
+  // lets the service manager start the new code without killing a context.
+  if (![...contexts.values()].some((context) => !context.dead) && codeVersion() !== startedCode) {
+    log('code changed on disk, restarting');
+    void shutdown();
+    return;
+  }
   for (const id of readdirSync(OUTPUT_ROOT)) {
     const dir = join(OUTPUT_ROOT, id);
     if (!contexts.has(id) && now - statSync(dir).mtimeMs > OUTPUT_RETENTION_MS) rmSync(dir, { recursive: true, force: true });
@@ -874,6 +882,10 @@ function log(line: string): void {
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+}
+
+function codeVersion(): number {
+  return Math.max(...readdirSync(join(ROOT, 'src')).map((name) => statSync(join(ROOT, 'src', name)).mtimeMs));
 }
 
 async function shutdown(): Promise<void> {

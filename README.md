@@ -53,7 +53,7 @@ Ctrl-C or a dropped connection leaves the saved session as it was. `login` refus
 
 The tunnel keeps port 9377 loopback-only on the host. While it is up, anything on your machine that reaches local port 9377 can drive the shared browser, so close it after logging in.
 
-The controller runs as a user service and only picks up new code or a new `node` binary when restarted:
+The controller runs as a user service. When no context is open it exits if `src/` changed since it started, and the service starts the new code. A new `node` binary needs a manual restart:
 
 ```sh
 systemctl --user restart browser-swarm   # Linux; journalctl --user -u browser-swarm for logs
