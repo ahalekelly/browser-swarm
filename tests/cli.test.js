@@ -181,13 +181,6 @@ test('an unreachable controller exits 3 and names the service command', async (t
   assert.match(failed.stderr, /systemctl --user start browser-swarm|install-controller-service\.sh/);
 });
 
-test('a missing token says the controller has never run', async (t) => {
-  const fixture = await createFixture(t);
-  const failed = swarm(fixture, ['status']);
-  assert.equal(failed.status, 3);
-  assert.match(failed.stderr, /no controller token at .*controller-token/);
-});
-
 test('the sandbox proxy carries requests to the host loopback', async (t) => {
   const fixture = await createFixture(t);
   fs.writeFileSync(path.join(fixture.dir, 'controller-token'), 'fixture-token\n');

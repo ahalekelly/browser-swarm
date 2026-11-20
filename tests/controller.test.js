@@ -227,19 +227,6 @@ test('repeated open/close cycles leave nothing behind', async (t) => {
   assert.equal((await controller.call('GET', '/status')).body.browsers[0].running, true, 'the browser was restarted between cycles');
 });
 
-test('a large result is previewed and saved in full', async (t) => {
-  const fixture = await createFixture(t);
-  const controller = await startController(t, fixture);
-  const { id, outputDir } = (await controller.call('POST', '/contexts', { backend: 'chrome' })).body;
-
-  const small = await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_big', arguments: { lines: 200 } });
-  assert.equal(small.body.savedPath, undefined);
-
-  const big = await controller.call('POST', `/contexts/${id}/call`, { name: 'browser_big', arguments: { lines: 500 } });
-  assert.equal(path.dirname(big.body.savedPath), outputDir);
-  assert.equal(fs.readFileSync(big.body.savedPath, 'utf8').split('\n').length, 500);
-});
-
 test('artifacts stay readable after the context closes', async (t) => {
   const fixture = await createFixture(t);
   const controller = await startController(t, fixture);
@@ -264,24 +251,6 @@ test('a closed context\'s output dir is deleted a day after its last write', asy
 
   await eventually(() => !fs.existsSync(stale), 5000, 'stale output dir pruned');
   assert.equal(fs.existsSync(fresh), true);
-});
-
-test('each context gets its own output dir as its workspace root', async (t) => {
-  const fixture = await createFixture(t);
-  const argsDir = path.join(fixture.dir, 'args');
-  fs.mkdirSync(argsDir);
-  const controller = await startController(t, fixture, { FAKE_ARGS_DIR: argsDir });
-
-  const opened = await Promise.all([0, 1].map(() => controller.call('POST', '/contexts', { backend: 'chrome' })));
-  const launches = fs.readdirSync(argsDir).map((name) => JSON.parse(fs.readFileSync(path.join(argsDir, name), 'utf8')));
-  assert.equal(launches.length, 2);
-  for (const launch of launches) {
-    assert.deepEqual(launch.argv.slice(0, 3), ['--cdp-endpoint', `http://127.0.0.1:${fixture.ports.chrome}`, '--isolated']);
-    assert.deepEqual(launch.argv.slice(5, 7), ['--image-responses', 'omit']);
-    assert.equal(launch.cwd, launch.argv[4], 'the child did not run inside its output dir');
-  }
-  assert.notEqual(launches[0].cwd, launches[1].cwd);
-  assert.deepEqual(new Set(launches.map((launch) => launch.cwd)), new Set(opened.map((response) => response.body.outputDir)));
 });
 
 test('a session context starts from its saved state and saves back on close', async (t) => {

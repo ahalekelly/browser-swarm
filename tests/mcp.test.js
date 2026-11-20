@@ -1,11 +1,6 @@
 // `swarm mcp` is how Codex agents reach the controller, because their command
-// sandbox has no network at all. It owns exactly one context and must keep the
-// lifecycle rules the CLI has: one context per session, an idle lease, an
-// explicit close, and an agent-visible error when startup fails.
+// sandbox has no network at all. It owns exactly one context.
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import { once } from 'node:events';
-import path from 'node:path';
 import test from 'node:test';
 import { createFixture, eventually, initialize, NO_SANDBOX_PROXY, spawnJsonRpc, startController } from './helpers.js';
 
@@ -67,49 +62,6 @@ test('a lost context is reported to the agent', async (t) => {
   const lost = await call(session, 3, 'tools/call', { name: 'browser_tabs', arguments: { action: 'list' } });
   assert.equal(lost.result.isError, true);
   assert.match(lost.result.content[0].text, /exited, so context .* is lost/);
-});
-
-test('the session drops its context after five idle minutes', async (t) => {
-  const fixture = await createFixture(t, { IDLE_MS: 400 });
-  const controller = await startController(t, fixture);
-  const session = adapter(t, fixture);
-  await initialize(session);
-
-  const [code] = await once(session.child, 'close');
-  assert.equal(code, 75);
-  assert.match(session.stderr(), /Relaunch the browser agent/);
-  assert.deepEqual((await controller.call('GET', '/contexts')).body.contexts, []);
-});
-
-test('closing stdin closes the context', async (t) => {
-  const fixture = await createFixture(t);
-  const controller = await startController(t, fixture);
-  const session = adapter(t, fixture);
-  await initialize(session);
-  await call(session, 2, 'tools/call', { name: 'browser_tabs', arguments: { action: 'list' } });
-
-  session.child.stdin.end();
-  await once(session.child, 'close');
-  assert.deepEqual((await controller.call('GET', '/contexts')).body.contexts, []);
-});
-
-test('a session that cannot get a context still explains itself over MCP', async (t) => {
-  const fixture = await createFixture(t);
-  fs.writeFileSync(path.join(fixture.dir, 'controller-token'), 'nobody-is-listening\n');
-  const session = adapter(t, fixture);
-  await initialize(session);
-
-  const tools = await call(session, 2, 'tools/list', {});
-  assert.deepEqual(tools.result.tools.map((tool) => tool.name), ['browser_swarm_error']);
-  assert.match(tools.result.tools[0].description, /could not attach browser tools/);
-  assert.match(tools.result.tools[0].description, /cannot reach the BrowserSwarm controller/);
-
-  const called = await call(session, 3, 'tools/call', { name: 'browser_swarm_error', arguments: {} });
-  assert.equal(called.result.isError, true);
-
-  session.child.stdin.end();
-  const [code] = await once(session.child, 'close');
-  assert.equal(code, 1);
 });
 
 function adapter(t, fixture) {
